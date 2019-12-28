@@ -4,9 +4,6 @@ from sklearn.base import clone
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 
-def sum_squared_error(y_true,y_pred):
-    return np.sum((y_pred-y_true)**2)
-
 class SCOAL():
     
     def __init__(self, 
@@ -167,7 +164,6 @@ class SCOAL():
             )   
             elapsed_time = time.time() - start
             if self.verbose:
-                #print(iter_count,self.error,delta_error,rows_changed,cols_changed)
                 print('|'.join(x.ljust(15) for x in ['%i' % iter_count,
                                                     '%.3f' % self.error,
                                                     '%.5f' % delta_error,
