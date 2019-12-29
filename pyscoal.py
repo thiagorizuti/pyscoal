@@ -29,16 +29,26 @@ class SCOAL():
         self.verbose=verbose
     
     def __initialize_clustering(self,matrix):
+        n_rows, n_cols = matrix.shape
         self.estimators = [[clone(self.estimator) for n in range(self.n_row_cluster)] 
                             for n in range(self.n_col_cluster)]
-        if self.init=='random':
-            n_rows, n_cols = matrix.shape
+        if self.init=='uniform':
+            self.row_clusters = np.zeros(n_rows)
+            splits = np.array_split(np.arange(n_rows),self.n_row_cluster)
+            for i,s in enumerate(splits):
+                self.row_clusters[s] = i
+            self.col_clusters = np.zeros(n_cols)
+            splits = np.array_split(np.arange(n_cols),self.n_col_cluster)
+            for i,s in enumerate(splits):
+                self.col_clusters[s] = i
+        elif self.init=='random':
             np.random.seed(self.random_state)  
             self.row_clusters = np.array([np.random.choice(np.arange(self.n_row_cluster)) for i in range(n_rows)])
             self.col_clusters = np.array([np.random.choice(np.arange(self.n_col_cluster)) for i in range(n_cols)])
         else: 
             self.row_clusters = np.array(self.init[0])
             self.col_clusters = np.array(self.init[1])
+        print(self.row_clusters.shape,self.col_clusters.shape)
    
     def __fit_models(self,matrix,row_features,col_features,fit_mask):
         delta_error = self.error
@@ -116,7 +126,7 @@ class SCOAL():
             new_col_clusters[i] = np.argmin(error)
         return new_col_clusters
         
-    def fit(self,matrix,row_features,col_features):
+    def fit(self,matrix,row_features,col_features,mask=None):
         
         iter_count=0 
         rows_changed=0
@@ -171,4 +181,5 @@ class SCOAL():
                                                     '%i'  % cols_changed,
                                                     '%i' % elapsed_time]))
 
-        
+    def predict(self,matrix,row_features,col_features,mask=None):
+        pass
