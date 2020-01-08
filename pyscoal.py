@@ -199,3 +199,28 @@ class SCOAL():
                                                     '%i'  % cols_changed,
                                                     '%i' % elapsed_time]))
 
+    def predict(self,matrix,row_features,col_features,mask=None):
+        
+        if mask is None:
+            mask = np.isnan(matrix)
+
+        prediction = np.copy(matrix)
+
+        for i in range(self.n_row_cluster):
+            for j in range(self.n_col_cluster):
+
+                row_cluster_mask = self.row_clusters==i
+                col_cluster_mask = self.col_clusters==j
+                cocluster_mask = np.logical_and(
+                    np.repeat(row_cluster_mask.reshape(-1,1),col_cluster_mask.shape,axis=1),
+                    np.repeat(col_cluster_mask.reshape(1,-1),row_cluster_mask.shape,axis=0)
+                )
+
+                idx = np.where(mask & cocluster_mask)
+
+                X = np.hstack((row_features[idx[0]],col_features[idx[1]]))
+
+                y_pred = self.estimators[i][j].predict(X)
+
+                prediction[idx] = y_pred
+        return prediction
