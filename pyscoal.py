@@ -14,6 +14,7 @@ class SCOAL():
                 max_iter = np.nan,
                 metric=mean_squared_error,
                 init='random',
+                inner_convergence=False,
                 random_state=42,
                 verbose=False):
         
@@ -21,12 +22,14 @@ class SCOAL():
         self.n_row_cluster = n_row_cluster
         self.n_col_cluster = n_col_cluster
         self.tol = tol
-        self.metric = metric
         self.max_iter = max_iter
-        self.error=np.nan
+        self.metric = metric
         self.init=init
+        self.inner_convergence=inner_convergence
         self.random_state=random_state
         self.verbose=verbose
+        self.error=np.nan
+
     
     def __initialize_clustering(self,matrix):
         n_rows, n_cols = matrix.shape
@@ -48,7 +51,6 @@ class SCOAL():
         else: 
             self.row_clusters = np.array(self.init[0])
             self.col_clusters = np.array(self.init[1])
-        print(self.row_clusters.shape,self.col_clusters.shape)
    
     def __fit_models(self,matrix,row_features,col_features,fit_mask):
         delta_error = self.error
@@ -129,11 +131,12 @@ class SCOAL():
     def fit(self,matrix,row_features,col_features,mask=None):
         
         iter_count=0 
-        rows_changed=0
-        cols_changed=0
         elapsed_time = 0
+        rows_changed = 0
+        cols_changed = 0
         delta_error=np.nan
         converged = False
+        inner_converged= False
 
         fit_mask = np.invert(np.isnan(matrix))
         
@@ -151,18 +154,31 @@ class SCOAL():
                                                     '%i'  % cols_changed,
                                                     '%i' % elapsed_time]))
         start = time.time()
-        while(not converged):          
-            new_row_clusters = self.__update_row_cluster(matrix,row_features,col_features,fit_mask)
-            rows_changed = np.sum(new_row_clusters!=self.row_clusters)
-            self.row_clusters = np.copy(new_row_clusters)
+        while(not converged):
+            rows_changed = 0
+            cols_changed = 0
+            inner_converged=False
+            inner_count = 0 
+            while (not inner_converged):
 
+                new_row_clusters = self.__update_row_cluster(matrix,row_features,col_features,fit_mask)
+                inner_rows_changed = np.sum(new_row_clusters!=self.row_clusters)
+                rows_changed += inner_rows_changed
+                self.row_clusters = np.copy(new_row_clusters)
 
+                new_col_clusters = self.__update_col_cluster(matrix,row_features,col_features,fit_mask)
+                inner_cols_changed = np.sum(new_col_clusters!=self.col_clusters)
+                cols_changed += inner_cols_changed
+                self.col_clusters = np.copy(new_col_clusters)
+                
+                inner_count+=1
 
-            new_col_clusters = self.__update_col_cluster(matrix,row_features,col_features,fit_mask)
-            cols_changed = np.sum(new_col_clusters!=self.col_clusters)
-            self.col_clusters = np.copy(new_col_clusters)
+                inner_converged = ( 
+                                    not self.inner_convergence or
+                                    (inner_rows_changed==0 and inner_cols_changed==0) or
+                                    inner_count >= 4
+                )
 
-            
             delta_error = self.__fit_models(matrix,row_features,col_features,fit_mask)
         
             iter_count += 1
@@ -172,7 +188,9 @@ class SCOAL():
                 (delta_error > 0 and delta_error < self.tol) or
                 (rows_changed==0 and cols_changed==0)
             )   
+
             elapsed_time = time.time() - start
+
             if self.verbose:
                 print('|'.join(x.ljust(15) for x in ['%i' % iter_count,
                                                     '%.3f' % self.error,
@@ -181,5 +199,3 @@ class SCOAL():
                                                     '%i'  % cols_changed,
                                                     '%i' % elapsed_time]))
 
-    def predict(self,matrix,row_features,col_features,mask=None):
-        pass
