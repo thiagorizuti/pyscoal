@@ -224,3 +224,31 @@ class SCOAL():
 
                 prediction[idx] = y_pred
         return prediction
+
+    
+    def score(self,matrix,row_features,col_features,mask=None):
+        score = 0 
+
+        if mask is None:
+            mask = np.invert(np.isnan(matrix))
+
+        for i in range(self.n_row_cluster):
+            for j in range(self.n_col_cluster):
+
+                row_cluster_mask = self.row_clusters==i
+                col_cluster_mask = self.col_clusters==j
+                cocluster_mask = np.logical_and(
+                    np.repeat(row_cluster_mask.reshape(-1,1),col_cluster_mask.shape,axis=1),
+                    np.repeat(col_cluster_mask.reshape(1,-1),row_cluster_mask.shape,axis=0)
+                )
+
+                idx = np.where(mask & cocluster_mask)
+
+                X = np.hstack((row_features[idx[0]],col_features[idx[1]]))
+                y = matrix[idx].ravel()
+
+                y_pred = self.estimators[i][j].predict(X)
+
+                score += self.metric(y,y_pred)
+
+        return score/(self.n_row_cluster*self.n_col_cluster)
