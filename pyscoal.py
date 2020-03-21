@@ -14,7 +14,8 @@ class SCOAL():
                 n_col_cluster = 2,
                 tol = 1e-4, 
                 max_iter = np.nan,
-                metric=mean_squared_error,
+                scoring=mean_squared_error,
+                minimize = True,
                 init='random',
                 inner_convergence=False,
                 random_state=42,
@@ -26,151 +27,250 @@ class SCOAL():
         self.n_col_cluster = n_col_cluster
         self.tol = tol
         self.max_iter = max_iter
-        self.metric = metric
-        self.init=init
-        self.inner_convergence=inner_convergence
-        self.random_state=random_state
-        self.verbose=verbose
-        self.n_jobs=n_jobs
-        self.error=np.nan
+        self.scoring = scoring
+        self.minimize = minimize
+        self.init = init
+        self.inner_convergence = inner_convergence
+        self.random_state = random_state
+        self.n_jobs = n_jobs
+        self.verbose = verbose
 
-    
-    def initialize_clustering(self,matrix,row_features,col_features,fit_mask):
+    def _fit_model(self,matrix,row_features,col_features,fit_mask,row_cluster,col_cluster):
 
-        n_rows, n_cols = matrix.shape
-        self.estimators = [[clone(self.estimator) for i in range(self.n_col_cluster)] 
-                            for j in range(self.n_row_cluster)]
-        if self.init=='uniform':
-            self.row_clusters = np.zeros(n_rows)
-            splits = np.array_split(np.arange(n_rows),self.n_row_cluster)
-            for i,s in enumerate(splits):
-                self.row_clusters[s] = i
-            self.col_clusters = np.zeros(n_cols)
-            splits = np.array_split(np.arange(n_cols),self.n_col_cluster)
-            for i,s in enumerate(splits):
-                self.col_clusters[s] = i
-
-        elif self.init=='random':
-            np.random.seed(self.random_state)  
-            self.row_clusters = np.array([np.random.choice(np.arange(self.n_row_cluster)) for i in range(n_rows)])
-            self.col_clusters = np.array([np.random.choice(np.arange(self.n_col_cluster)) for i in range(n_cols)])
-
-        else: 
-            self.row_clusters = np.array(self.init[0])
-            self.col_clusters = np.array(self.init[1])
-
-        if fit_mask is None:
-            fit_mask = np.invert(np.isnan(matrix))
-        error = self._fit_models(matrix,row_features,col_features,fit_mask)
-
-        return error
-
-    def _fit_model(self,matrix,row_features,col_features,mask,i,j):
-
-        row_cluster_mask = self.row_clusters==i
-        col_cluster_mask = self.col_clusters==j
+        row_cluster_mask = self.row_clusters==row_cluster
+        col_cluster_mask = self.col_clusters==col_cluster
         cocluster_mask = np.logical_and(
             np.repeat(row_cluster_mask.reshape(-1,1),col_cluster_mask.shape,axis=1),
             np.repeat(col_cluster_mask.reshape(1,-1),row_cluster_mask.shape,axis=0)
         )
 
-        idx = np.where(mask & cocluster_mask)
+        idx = np.where(fit_mask & cocluster_mask)
 
         X = np.hstack((row_features[idx[0]],col_features[idx[1]]))
         y = matrix[idx].ravel()
 
-        estimator = clone(self.estimators[i][j])
+        estimator = clone(self.estimator)
         estimator.fit(X,y)
-        y_pred = estimator.predict(X)
-        error = self.metric(y,y_pred)
 
-        return error, estimator  
+        return estimator  
 
-    def _fit_models(self,matrix,row_features,col_features,mask):        
-        results = Parallel(n_jobs=self.n_jobs)(delayed(self._fit_model)(matrix,row_features,col_features,mask,i,j) 
+    def _fit_models(self,matrix,row_features,col_features,fit_mask): 
+
+        estimators = Parallel(n_jobs=self.n_jobs)(delayed(self._fit_model)(matrix,row_features,col_features,fit_mask,i,j) 
             for i in range(self.n_row_cluster) for j in range(self.n_col_cluster))
 
-        errors = [r[0] for r in results]
-        estimators = [r[1] for r in results]
-        for i in range(self.n_row_cluster):
-            for j in range(self.n_col_cluster):
-                self.estimators[i][j] = estimators[i*j]
-        return np.mean(errors) 
-    
-        
-    def _update_row_cluster(self,matrix,row_features,col_features,fit_mask):
-        n_rows, _ = matrix.shape
-        new_row_clusters = np.copy(self.row_clusters)
-        for i in range(n_rows):
-            error = np.zeros(self.n_row_cluster)
-            for j in range(self.n_row_cluster):
-                for k in range(self.n_col_cluster):
-                        sub_matrix = matrix[i,self.col_clusters==k]
-                        sub_row_features = row_features[i,:][None,:]
-                        sub_col_features = col_features[self.col_clusters==k,:]
+        estimators =  [[estimators[i*self.n_col_cluster+j] for j in range(self.n_col_cluster)] for i in range(self.n_row_cluster)]
 
-                        X = np.concatenate([np.repeat(sub_row_features,sub_col_features.shape[0],axis=0),
-                        sub_col_features],axis=1)
-                        y = sub_matrix.ravel()
-                        
-                        mask = fit_mask[i,self.col_clusters==k].ravel()
-                        y = y[mask]
-                        X = X[mask]
-                        if y.size > 0:
-                            y_pred = self.estimators[j][k].predict(X)
-                            error[j] += self.metric(y,y_pred)
-                error[j] = error[j]/self.n_col_cluster
-            new_row_clusters[i] = np.argmin(error)
+        return estimators
+
+    def _predict_model(self,matrix,row_features,col_features,fit_mask,row_cluster,col_cluster):
+
+        prediction = np.copy(matrix)
+        
+        row_cluster_mask = self.row_clusters==row_cluster
+        col_cluster_mask = self.col_clusters==col_cluster
+        cocluster_mask = np.logical_and(
+            np.repeat(row_cluster_mask.reshape(-1,1),col_cluster_mask.shape,axis=1),
+            np.repeat(col_cluster_mask.reshape(1,-1),row_cluster_mask.shape,axis=0)
+        )
+
+        idx = np.where(fit_mask & cocluster_mask)
+
+        X = np.hstack((row_features[idx[0]],col_features[idx[1]]))
+
+        estimator = self.estimators[row_cluster][col_cluster]
+        y_pred = estimator.predict(X)
+
+        prediction[idx] = y_pred
+
+        return prediction
+
+    def _predict_models(self,matrix,row_features,col_features,fit_mask):
+
+        predictions = Parallel(n_jobs=self.n_jobs)(delayed(self._predict_model)(matrix,row_features,col_features,fit_mask,i,j) 
+            for i in range(self.n_row_cluster) for j in range(self.n_col_cluster))
+
+        predictions = [[predictions[i*self.n_col_cluster+j] for j in range(self.n_col_cluster)] for i in range(self.n_row_cluster)]
+
+        return predictions
+
+    def _score_model(self,matrix,row_features,col_features,fit_mask,row_cluster,col_cluster):
+        
+        row_cluster_mask = self.row_clusters==row_cluster
+        col_cluster_mask = self.col_clusters==col_cluster
+        cocluster_mask = np.logical_and(
+            np.repeat(row_cluster_mask.reshape(-1,1),col_cluster_mask.shape,axis=1),
+            np.repeat(col_cluster_mask.reshape(1,-1),row_cluster_mask.shape,axis=0)
+        )
+
+        idx = np.where(fit_mask & cocluster_mask)
+
+        X = np.hstack((row_features[idx[0]],col_features[idx[1]]))
+        y = matrix[idx].ravel()
+
+        estimator = self.estimators[row_cluster][col_cluster]
+        y_pred = estimator.predict(X)
+
+        score = self.scoring(y,y_pred)
+
+        return score
+
+    def _score_models(self,matrix,row_features,col_features,fit_mask):
+
+        scores = Parallel(n_jobs=self.n_jobs)(delayed(self._score_model)(matrix,row_features,col_features,fit_mask,i,j) 
+            for i in range(self.n_row_cluster) for j in range(self.n_col_cluster))
+
+        scores = [[scores[i*self.n_col_cluster+j] for j in range(self.n_col_cluster)] for i in range(self.n_row_cluster)]
+
+        return scores
+
+    def _update_row_cluster(self,matrix,row_features,col_features,fit_mask,row):
+        n_rows, n_cols = matrix.shape
+
+        scores = np.zeros(self.n_row_cluster)
+
+        row_mask = np.arange(n_rows)==row
+        row_mask = np.repeat(row_mask.reshape(-1,1),n_cols,axis=1)
+
+        for j in range(self.n_row_cluster):
+            for k in range(self.n_col_cluster):
+
+                row_cluster_mask = self.col_clusters==k
+                col_cluster_mask = self.col_clusters==j
+                cocluster_mask = np.logical_and(
+                    np.repeat(row_cluster_mask.reshape(-1,1),col_cluster_mask.shape,axis=1),
+                    np.repeat(col_cluster_mask.reshape(1,-1),row_cluster_mask.shape,axis=0)
+                )
+                
+                idx = np.where(fit_mask & cocluster_mask & row_mask)
+
+                X = np.hstack((row_features[idx[0]],col_features[idx[1]]))
+                y = matrix[idx].ravel()
+
+                y_pred = self.estimators[j][k].predict(X)
+
+                scores[j] += self.scoring(y,y_pred)
+
+            scores[j] = scores[j]/self.n_col_cluster
+            
+        new_row_cluster = np.argmin(scores) if self.minimize else np.argmax(scores)
+
+        return new_row_cluster
+    
+    def _update_row_clusters(self,matrix,row_features,col_features,fit_mask):
+        n_rows, _ = matrix.shape
+
+        new_row_clusters = Parallel(n_jobs=self.n_jobs)(delayed(self._update_row_cluster)(matrix,row_features,col_features,fit_mask,i) 
+            for i in range(n_rows))
+
         return new_row_clusters
         
-    def _update_col_cluster(self,matrix,row_features,col_features,fit_mask):
-        _, n_cols = matrix.shape
-        new_col_clusters = np.copy(self.col_clusters)
-        for i in range(n_cols):
-            error = np.zeros(self.n_col_cluster)
-            for j in range(self.n_col_cluster):
-                for k in range(self.n_row_cluster): 
-                        sub_matrix = matrix[self.row_clusters==k,i]
-                        sub_row_features = row_features[self.row_clusters==k,:]
-                        sub_col_features = col_features[i,:][None,:]
-                        
-                        X = np.concatenate([sub_row_features,
-                        np.repeat(sub_col_features,sub_row_features.shape[0],axis=0)],axis=1)
-                        y = sub_matrix.ravel()
+    def _update_col_cluster(self,matrix,row_features,col_features,fit_mask,col):
+        n_rows, n_cols = matrix.shape
 
-                        mask = fit_mask[self.row_clusters==k,i].ravel()
-                        y = y[mask]
-                        X = X[mask]
-                        
-                        if y.size > 0:
-                            y_pred = self.estimators[k][j].predict(X)
-                            error[j] += self.metric(y,y_pred)
-                error[j] = error[j]/self.n_row_cluster
-            new_col_clusters[i] = np.argmin(error)
+        scores = np.zeros(self.n_col_cluster)
+
+        col_mask = np.arange(n_rows)==col
+        col_mask = np.repeat(col_mask.reshape(-1,1),n_cols,axis=1)
+
+        for j in range(self.n_col_cluster):
+            for k in range(self.n_row_cluster):
+
+                row_cluster_mask = self.col_clusters==j
+                col_cluster_mask = self.col_clusters==k
+                cocluster_mask = np.logical_and(
+                    np.repeat(row_cluster_mask.reshape(-1,1),col_cluster_mask.shape,axis=1),
+                    np.repeat(col_cluster_mask.reshape(1,-1),row_cluster_mask.shape,axis=0)
+                )
+                
+                idx = np.where(fit_mask & cocluster_mask & col_mask)
+
+                X = np.hstack((row_features[idx[0]],col_features[idx[1]]))
+                y = matrix[idx].ravel()
+
+                y_pred = self.estimators[k][j].predict(X)
+
+                scores[j] += self.scoring(y,y_pred)
+
+            scores[j] = scores[j]/self.n_col_cluster
+            
+        new_col_cluster = np.argmin(scores) if self.minimize else np.argmax(scores)
+
+        return new_col_cluster
+
+    def _update_col_clusters(self,matrix,row_features,col_features,fit_mask):
+        _, n_cols = matrix.shape
+       
+        new_col_clusters = Parallel(n_jobs=self.n_jobs)(delayed(self._update_row_cluster)(matrix,row_features,col_features,fit_mask,i) 
+            for i in range(n_cols))
+
         return new_col_clusters
+
+    def _check_cocluster(self,matrix,fit_mask,row_cluster,col_cluster):
         
-    def fit(self,matrix,row_features,col_features,mask=None):
+        row_cluster_mask = self.row_clusters==row_cluster
+        col_cluster_mask = self.col_clusters==col_cluster
+        cocluster_mask = np.logical_and(
+            np.repeat(row_cluster_mask.reshape(-1,1),col_cluster_mask.shape,axis=1),
+            np.repeat(col_cluster_mask.reshape(1,-1),row_cluster_mask.shape,axis=0)
+        )
+
+        idx = np.where(fit_mask & cocluster_mask)
+
+        y = matrix[idx].ravel()
+
+        valid = y.size>0
+
+        return  valid
+
+    def check_coclusters(self,matrix,fit_mask):
+        valids = Parallel(n_jobs=self.n_jobs)(delayed(self._check_cocluster)(matrix,fit_mask,i,j) 
+            for i in range(self.n_row_cluster) for j in range(self.n_col_cluster))
+
+        return valids
+
+    def initialize_clustering(self,matrix):
+        n_rows, n_cols = matrix.shape
+
+        if self.init=='random':
+            np.random.seed(self.random_state)  
+            self.row_clusters = np.array([np.random.choice(np.arange(self.n_row_cluster)) for i in range(n_rows)])
+            self.col_clusters = np.array([np.random.choice(np.arange(self.n_col_cluster)) for i in range(n_cols)])
+        else: 
+            self.row_clusters = np.array(self.init[0])
+            self.col_clusters = np.array(self.init[1])
+    
+    def fit(self,matrix,row_features,col_features,fit_mask=None):
         
         iter_count=0 
         elapsed_time = 0
         rows_changed = 0
         cols_changed = 0
-        delta_error=np.nan
+        score = np.nan
+        delta_score=np.nan
         converged = False
         inner_converged= False
 
-        fit_mask = np.invert(np.isnan(matrix))
+        if fit_mask is None:
+            fit_mask = np.invert(np.isnan(matrix))
         
-        self.error = self.initialize_clustering(matrix,row_features,col_features,fit_mask)
-        #delta_error = self.__fit_models(matrix,row_features,col_features,fit_mask)
+
+        self.estimators = [[clone(self.estimator) for i in range(self.n_col_cluster)] 
+                            for j in range(self.n_row_cluster)]
+        
+
+        
+        self.initialize_clustering(matrix)
+        self._fit_models(matrix,row_features,col_features,fit_mask)
+        score = np.mean(self._score_models(matrix,row_features,col_features,fit_mask))
 
         if self.verbose:
             print('|'.join(x.ljust(15) for x in [
-                'iteration',' error','delta error','rows changed', 'columns changed', 'elapsed time (s)']))
+                'iteration',' score','delta score','rows changed', 'columns changed', 'elapsed time (s)']))
 
             print('|'.join(x.ljust(15) for x in ['%i' % iter_count,
-                                                    '%.3f' % self.error,
-                                                    '%.3f' % delta_error,
+                                                    '%.3f' % score,
+                                                    '%.3f' % delta_score,
                                                     '%i' % rows_changed,
                                                     '%i'  % cols_changed,
                                                     '%i' % elapsed_time]))
@@ -182,12 +282,12 @@ class SCOAL():
             inner_count = 0 
             while (not inner_converged):
 
-                new_row_clusters = self._update_row_cluster(matrix,row_features,col_features,fit_mask)
+                new_row_clusters = self._update_row_clusters(matrix,row_features,col_features,fit_mask)
                 inner_rows_changed = np.sum(new_row_clusters!=self.row_clusters)
                 rows_changed += inner_rows_changed
                 self.row_clusters = np.copy(new_row_clusters)
 
-                new_col_clusters = self._update_col_cluster(matrix,row_features,col_features,fit_mask)
+                new_col_clusters = self._update_col_clusters(matrix,row_features,col_features,fit_mask)
                 inner_cols_changed = np.sum(new_col_clusters!=self.col_clusters)
                 cols_changed += inner_cols_changed
                 self.col_clusters = np.copy(new_col_clusters)
@@ -197,18 +297,19 @@ class SCOAL():
                 inner_converged = ( 
                                     not self.inner_convergence or
                                     (inner_rows_changed==0 and inner_cols_changed==0) or
-                                    inner_count >= 4
+                                    inner_count >= self.max_iter
                 )
 
-            delta_error = self.error
-            self.error = self._fit_models(matrix,row_features,col_features,fit_mask)
-            delta_error -= self.error
+            delta_score = score
+            self._fit_models(matrix,row_features,col_features,fit_mask)
+            score = np.mean(self._score_models(matrix,row_features,col_features,fit_mask))
+            delta_score -= score
 
             iter_count += 1
 
             converged = (
                 iter_count >= self.max_iter or
-                (delta_error > 0 and delta_error < self.tol) or
+                (delta_score > 0 and delta_score < self.tol) or
                 (rows_changed==0 and cols_changed==0)
             )   
 
@@ -216,62 +317,27 @@ class SCOAL():
 
             if self.verbose:
                 print('|'.join(x.ljust(15) for x in ['%i' % iter_count,
-                                                    '%.3f' % self.error,
-                                                    '%.5f' % delta_error,
+                                                    '%.3f' % score,
+                                                    '%.5f' % delta_score,
                                                     '%i' % rows_changed,
                                                     '%i'  % cols_changed,
                                                     '%i' % elapsed_time]))
 
-    def predict(self,matrix,row_features,col_features,mask=None):
+    def predict(self,matrix,row_features,col_features,pred_mask=None):
         
-        if mask is None:
-            mask = np.isnan(matrix)
+        if pred_mask is None:
+            pred_mask = np.isnan(matrix)
 
-        prediction = np.copy(matrix)
+        prediction = self._predict_models(matrix,row_features,col_features,pred_mask)
 
-        for i in range(self.n_row_cluster):
-            for j in range(self.n_col_cluster):
-
-                row_cluster_mask = self.row_clusters==i
-                col_cluster_mask = self.col_clusters==j
-                cocluster_mask = np.logical_and(
-                    np.repeat(row_cluster_mask.reshape(-1,1),col_cluster_mask.shape,axis=1),
-                    np.repeat(col_cluster_mask.reshape(1,-1),row_cluster_mask.shape,axis=0)
-                )
-
-                idx = np.where(mask & cocluster_mask)
-
-                X = np.hstack((row_features[idx[0]],col_features[idx[1]]))
-
-                y_pred = self.estimators[i][j].predict(X)
-
-                prediction[idx] = y_pred
         return prediction
 
     
-    def score(self,matrix,row_features,col_features,mask=None):
-        score = 0 
+    def score(self,matrix,row_features,col_features,score_mask=None):
+        
+        if score_mask is None:
+            score_mask = np.invert(np.isnan(matrix))
 
-        if mask is None:
-            mask = np.invert(np.isnan(matrix))
-
-        for i in range(self.n_row_cluster):
-            for j in range(self.n_col_cluster):
-
-                row_cluster_mask = self.row_clusters==i
-                col_cluster_mask = self.col_clusters==j
-                cocluster_mask = np.logical_and(
-                    np.repeat(row_cluster_mask.reshape(-1,1),col_cluster_mask.shape,axis=1),
-                    np.repeat(col_cluster_mask.reshape(1,-1),row_cluster_mask.shape,axis=0)
-                )
-
-                idx = np.where(mask & cocluster_mask)
-
-                X = np.hstack((row_features[idx[0]],col_features[idx[1]]))
-                y = matrix[idx].ravel()
-
-                y_pred = self.estimators[i][j].predict(X)
-
-                score += self.metric(y,y_pred)
-
-        return score/(self.n_row_cluster*self.n_col_cluster)
+        scores = np.mean(self._score_models(matrix,row_features,col_features,score_mask))
+      
+        return scores
