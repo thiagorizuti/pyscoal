@@ -118,8 +118,8 @@ class BaseScoal():
             (matrix,row_features,col_features,mask,*self._get_rows_cols(row_clusters,col_clusters,i,j),estimators[i][j])  
             for i in range(n_row_clusters) for j in range(n_col_clusters))
 
-        scores = [[scores[i*n_col_clusters+j] 
-            for j in range(n_col_clusters)] for i in range(n_row_clusters)]
+        scores = np.array([[scores[i*n_col_clusters+j] 
+            for j in range(n_col_clusters)] for i in range(n_row_clusters)])
 
         return scores
     
@@ -322,3 +322,138 @@ class SCOAL(BaseScoal):
     #         prediction[idx] = y_pred
 
     #         return prediction
+
+class EvolutiveScoal(BaseScoal):
+    
+    def __init__(self,
+                max_row_clusters=10,
+                max_col_clusters=10,
+                estimator=LinearRegression(),
+                scoring=mean_squared_error,
+                minimize=True,
+                pop_size=20,
+                cx_rate=0.7,
+                mut_rate=0.1,
+                elitism=0.05,
+                max_iter=np.nan,
+                tol = 1e-3,
+                init='random',
+                random_state=42,
+                n_jobs=1,
+                verbose=False):
+
+        self.max_row_clusters=max_row_clusters
+        self.max_col_clusters=max_col_clusters
+        self.estimator=estimator
+        self.scoring=mean_squared_error
+        self.minimize=minimize
+        self.pop_size = pop_size
+        self.cx_rate = cx_rate
+        self.mut_rate = mut_rate
+        self.elitism = elitism
+        self.max_iter = max_iter
+        self.tol=tol
+        self.init=init
+        self.random_state=random_state
+        self.n_jobs=n_jobs
+        self.verbose=verbose
+
+    def _local_search(self,matrix,row_features,col_features,test_mask,fit_mask,ind,fitness):
+        row_clusters,col_clusters,n_row_clusters,n_col_clusters = ind
+
+        estimators = self._fit_coclusters(matrix,row_features,col_features,fit_mask,row_clusters,col_clusters)
+        new_row_clusters,new_col_clusters = self._update_coclusters(matrix,row_features,col_features,test_mask,row_clusters,col_clusters,estimators)
+       
+        return (new_row_clusters,new_col_clusters,n_row_clusters,n_col_clusters)
+
+    def _replacement(self, new_pop):
+        if self.elitism > 0:
+           pass
+    
+    def _delete_cluster(self,clusters,cluster,n_clusters):
+        clusters[clusters==cluster] = -1
+        clusters[clusters>cluster] -= 1
+        clusters[clusters==-1] = np.random.choice(np.arange(n_clusters),(clusters==-1).sum())
+
+        return clusters
+
+    def _mutation(self,ind,fitness):
+        row_clusters,col_clusters,n_row_clusters,n_col_clusters = ind
+
+        if np.random.random() < self.mut_rate:
+            probs = np.nan_to_num(fitness.ravel())
+            probs = probs/probs.sum()
+            choice = np.random.choice(np.arange(probs.size),p=probs)
+            row_cluster,col_cluster = np.unravel_index(choice,fitness.shape)
+            dim = np.random.randint(2) 
+            if dim == 0 and n_row_clusters > 1 :
+                n_row_clusters -= 1
+                row_clusters=self._delete_cluster(row_clusters,row_cluster,n_row_clusters)
+            if dim == 1 and n_col_clusters > 1:
+                n_col_clusters -= 1
+                col_clusters=self._delete_cluster(col_clusters,col_cluster,n_col_clusters)
+
+        return (row_clusters,col_clusters,n_row_clusters,n_col_clusters)
+
+            
+    def _crossover(self,ind1,ind2):
+        if np.random.random() < self.cx_rate:
+            pass
+                 
+    def _reproduction(self,selected):
+        new_pop = [self._mutation(self.pop[i],self.fitness[i]) for i in selected]
+        return new_pop
+        
+    def _selection(self):
+        probs = np.nanmean(self.fitness,axis=(1,2))
+        probs = probs/probs.sum()
+        selected = np.random.choice(np.arange(self.pop_size),self.pop_size,replace=True,p=probs)
+        
+        return selected
+    
+    def _evaluate_fitness(self,matrix,row_features,col_features,fit_mask,test_mask):
+        fitness = np.zeros((self.pop_size,self.max_row_clusters,self.max_col_clusters))*np.nan
+        for i,ind in enumerate(self.pop):
+            row_clusters,col_clusters,n_row_clusters,n_col_clusters = ind
+            #n_row_clusters = np.unique(row_clusters).size,
+            #n_col_clusters = np.unique(col_clusters).size
+            estimators = self._fit_coclusters(matrix,row_features,col_features,fit_mask,row_clusters,col_clusters)
+            scores = self._score_coclusters(matrix,row_features,col_features,test_mask,row_clusters,col_clusters,estimators)
+            fitness[i,:scores.shape[0],:scores.shape[1]] = scores
+        return fitness
+       
+    def _init_pop(self,fit_mask):
+        np.random.seed(self.random_state) 
+        n_row_clusters = np.random.randint(1,self.max_row_clusters+1,self.pop_size)
+        n_col_clusters = np.random.randint(1,self.max_col_clusters+1,self.pop_size)
+        pop = [(*self._initialize_coclusters(fit_mask,i,j),i,j) for i,j in zip(n_row_clusters,n_col_clusters)]
+
+        return pop
+        
+            
+    def fit(self,matrix,row_features,col_features,fit_mask=None):
+        if fit_mask is None:
+            fit_mask = np.invert(np.isnan(matrix)) 
+        test = np.random.choice(np.arange(fit_mask.sum()), int(fit_mask.sum()*0.3),replace=False)
+        rows,cols = np.where(fit_mask)
+        test_mask = np.zeros(fit_mask.shape).astype(bool)
+        test_mask[rows[test],cols[test]] = True
+        fit_mask[rows[test],cols[test]] = False
+
+        iter_count = 0
+        converged = False
+
+        self.pop = self._init_pop(fit_mask)
+        self.fitness = self._evaluate_fitness(matrix,row_features,col_features,fit_mask,test_mask)
+       
+
+        while(not converged):
+          
+            print(iter_count, np.nanmean(self.fitness,axis=(1,2)).min())
+            selected = self._selection()
+            self.pop = self._reproduction(selected)
+            self.fitness = self._evaluate_fitness(matrix,row_features,col_features,fit_mask,test_mask)
+            iter_count+=1
+            converged = iter_count > self.max_iter
+            
+  
