@@ -26,16 +26,13 @@ class BaseScoal():
         
     def _smart_init(self,mask,n_row_clusters,n_col_clusters):
         n_rows, n_cols = mask.shape
-
         row_clusters = np.zeros(n_rows)*np.nan
         col_clusters = np.zeros(n_cols)*np.nan
-
         row_clusters_aux = np.zeros((n_row_clusters,n_cols))
         for row in np.arange(n_rows):
             row_cluster = np.argmax((mask[row,:]>row_clusters_aux).sum(axis=1))
             row_clusters_aux[row_cluster]=np.logical_or(row_clusters_aux[row_cluster],mask[row,:])
             row_clusters[row] = row_cluster
-
         col_clusters_aux = np.zeros((n_col_clusters,n_row_clusters))
         for col in np.arange(n_cols):
             col_cluster = np.argmax((row_clusters_aux[:,col]>col_clusters_aux).sum(axis=1))
@@ -87,6 +84,23 @@ class BaseScoal():
 
         return rows,cols
 
+    def _get_bool_mask(self,coclusters,row_cluster,col_cluster):
+        row_clusters, col_clusters = coclusters
+        if row_cluster is None:
+            rows_mask = np.ones(row_clusters.size).astype(bool)
+        else:
+            rows_mask = row_clusters==row_cluster
+        if col_cluster is None:
+            cols_mask = np.ones(col_clusters.size).astype(bool)
+        else:
+            cols_mask = col_clusters==col_cluster
+        cocluster_mask = np.logical_and(
+            np.repeat(rows_mask.reshape(-1,1),cols_mask.shape,axis=1),
+            np.repeat(cols_mask.reshape(1,-1),rows_mask.shape,axis=0)
+        )
+        
+        return cocluster_mask
+
     def _get_X_y(self,data,mask,rows,cols):
         matrix, row_features,col_features = data
         mask = mask[np.ix_(rows,cols)].ravel()
@@ -95,6 +109,10 @@ class BaseScoal():
         X = X[mask]
         y = matrix[np.ix_(rows,cols)].ravel()
         y = y[mask]
+
+        #idx = np.where(mask & cocluster_mask)
+        #X = np.hstack((row_features[idx[0]],col_features[idx[1]]))
+        #y = matrix[idx].ravel()
 
         return X, y
 
@@ -194,6 +212,7 @@ class BaseScoal():
         for i in range(n_row_clusters):
             for j in range(n_col_clusters):
                 scores[:,i] += results[i*n_col_clusters+j] 
+        scores = scores/n_col_clusters
         new_row_clusters  = np.argmin(scores,axis=1) if self.minimize else np.argmax(scores,axis=1)
 
         return new_row_clusters
@@ -206,6 +225,7 @@ class BaseScoal():
         for i in range(n_row_clusters):
             for j in range(n_col_clusters):
                 scores[:,j] += results[i*n_col_clusters+j] 
+        scores = scores/n_row_clusters
         new_col_clusters  = np.argmin(scores,axis=1) if self.minimize else np.argmax(scores,axis=1)
 
         return new_col_clusters
@@ -215,6 +235,33 @@ class BaseScoal():
         new_col_clusters = self._update_col_clusters(data,mask,coclusters,models)
 
         return new_row_clusters,new_col_clusters
+
+    def _fit_coclusters(self,data,mask,coclusters,models):
+        row_clusters, col_clusters = coclusters
+        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
+        results = self._compute_parallel(data,mask,coclusters,models,self._fit)
+        models =  [[results[i*n_col_clusters+j]
+            for j in range(n_col_clusters)] for i in range(n_row_clusters)]
+        
+        return models
+
+    def _predict_coclusters(self,data,mask,coclusters,models):
+        row_clusters, col_clusters = coclusters
+        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
+        results = self._compute_parallel(data,mask,coclusters,models,self._predict)
+        predictions =  [[results[i*n_col_clusters+j]
+            for j in range(n_col_clusters)] for i in range(n_row_clusters)]
+        
+        return predictions
+
+    def _score_coclusters(self,data,mask,coclusters,models):
+        row_clusters, col_clusters = coclusters
+        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
+        results = self._compute_parallel(data,mask,coclusters,models,self._score)
+        scores =  [[results[i*n_col_clusters+j]
+            for j in range(n_col_clusters)] for i in range(n_row_clusters)]
+        
+        return scores
 
 
 class SCOAL(BaseScoal):
@@ -299,31 +346,28 @@ class SCOAL(BaseScoal):
             if self.verbose:
                 self._print_status(iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time)
  
-    def score(self,matrix,row_features,col_features,pred_mask=None):
-        data = (matrix,row_features,col_features)
-        if pred_mask is None:
-            pred_mask = np.isnan(matrix)
-
-        results = self._compute_parallel(data,pred_mask,self.coclusters,self.models,self._score)
-        score = 0
-        for scores in results:
-            score += np.sum(scores)
-        score = score/len(results)
-
-        return score
-
     def predict(self,matrix,row_features,col_features,pred_mask=None):
         data = (matrix,row_features,col_features)
         if pred_mask is None:
             pred_mask = np.isnan(matrix)
+        pred_matrix = matrix.copy()
+        results = self._predict_coclusters(data,pred_mask,self.coclusters,self.models)
+        for i in range(self.n_row_clusters):
+            for j in range(self.n_col_clusters):
+                cocluster_mask = self._get_bool_mask(self.coclusters,i,j)
+                pred_matrix[cocluster_mask&pred_mask] = results[i][j]
 
-        results = self._compute_parallel(data,pred_mask,self.coclusters,self.models,self._score)
-        score = 0
-        for scores in results:
-            score += np.sum(scores)
-        score = score/len(results)
+        return pred_matrix
+    
+    def score(self,matrix,row_features,col_features,pred_mask=None):
+        data = (matrix,row_features,col_features)
+        if pred_mask is None:
+            pred_mask = np.invert(np.isnan(matrix))
+        scores = self._score_coclusters(data,pred_mask,self.coclusters,self.models)
+        score = np.mean(np.array(scores))
 
         return score
+
 
 class EvolutiveScoal(BaseScoal):
     
