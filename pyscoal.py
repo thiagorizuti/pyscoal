@@ -1,10 +1,12 @@
 import numpy as np
 import time
 from sklearn.base import clone
+from copy import deepcopy
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 from joblib import Parallel, delayed
 from sklearn.utils.validation import check_is_fitted
+
 
 class BaseScoal():
 
@@ -417,50 +419,155 @@ class EvolutiveScoal(BaseScoal):
 
         return clusters
 
-    def _mutation(self,pop,fitness):
+    def _delete_row_cluster(self,mask,coclusters,row_cluster):
+        row_clusters,col_clusters = coclusters
+        n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
+        if n_row_clusters == 1:
+            return row_clusters
+        else:
+            n_rows, n_cols = mask.shape
+            new_row_clusters = np.zeros(n_rows)*np.nan
+            col_clusters_aux = np.zeros((n_col_clusters,n_rows))
+            row_clusters_aux = np.zeros((n_row_clusters-1,n_col_clusters))
+            row_clusters[row_clusters==row_cluster] = -1
+            row_clusters[row_clusters>row_cluster] -= 1
+            for col in np.arange(n_cols):
+                col_cluster = col_clusters[col]
+                col_clusters_aux[col_cluster]=np.logical_or(col_clusters_aux[col_cluster],mask[:,col])  
+            for row in np.arange(n_rows):
+                if row_clusters[row]==-1:
+                    new_row_cluster = np.argmax((col_clusters_aux[:,row]>row_clusters_aux).sum(axis=1))
+                else:
+                    new_row_cluster=row_clusters[row]
+                row_clusters_aux[new_row_cluster]=np.logical_or(row_clusters_aux[new_row_cluster],col_clusters_aux[:,row])
+                new_row_clusters[row] = new_row_cluster
+        
+        return new_row_clusters
+
+    def _delete_col_cluster(self,mask,coclusters,col_cluster):
+        row_clusters,col_clusters = coclusters
+        n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
+        if n_col_clusters == 1:
+            return col_cluster
+        else:
+            n_rows, n_cols = mask.shape
+            new_col_clusters = np.zeros(n_cols)*np.nan
+            row_clusters_aux = np.zeros((n_row_clusters,n_cols))
+            col_clusters_aux = np.zeros((n_col_clusters-1,n_row_clusters))
+            col_clusters[col_clusters==col_cluster] = -1
+            col_clusters[col_clusters>col_cluster] -= 1
+            for row in np.arange(n_rows):
+                row_cluster = row_clusters[row]
+                row_clusters_aux[row_cluster]=np.logical_or(row_clusters_aux[row_cluster],mask[row,:])
+            for col in np.arange(n_cols):
+                if col_clusters[col]==-1:
+                    new_col_cluster = np.argmax((row_clusters_aux[:,col]>col_clusters_aux).sum(axis=1))
+                else:
+                    new_col_cluster=col_clusters[col]
+                col_clusters_aux[new_col_cluster]=np.logical_or(col_clusters_aux[new_col_cluster],row_clusters_aux[:,col])
+                new_col_clusters[col] = new_col_cluster
+        
+        return new_col_clusters
+
+    def _split_row_cluster(self,mask,coclusters,row_cluster):
+        row_clusters,col_clusters = coclusters
+        n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
+        if n_row_clusters == self.max_row_clusters:
+            return row_clusters
+        else:
+            n_rows, n_cols = mask.shape
+            new_row_clusters = np.zeros(n_rows)*np.nan
+            col_clusters_aux = np.zeros((n_col_clusters,n_rows))
+            row_clusters_aux = np.zeros((n_row_clusters+1,n_col_clusters))
+            for col in np.arange(n_cols):
+                col_cluster = col_clusters[col]
+                col_clusters_aux[col_cluster]=np.logical_or(col_clusters_aux[col_cluster],mask[:,col])
+            for row in np.arange(n_rows):
+                if row_clusters[row]==row_cluster:
+                    new_row_cluster = np.argmax((col_clusters_aux[:,row]>row_clusters_aux[[row_cluster,n_row_clusters],:]).sum(axis=1))
+                else:
+                    new_row_cluster=row_clusters[row]
+                row_clusters_aux[new_row_cluster]=np.logical_or(row_clusters_aux[new_row_cluster],col_clusters_aux[:,row])
+                new_row_clusters[row] = new_row_cluster
+
+        return new_row_clusters
+    
+    def _split_col_cluster(self,mask,coclusters,col_cluster):
+        row_clusters,col_clusters = coclusters
+        n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
+        if n_col_clusters == self.max_col_clusters:
+            return row_clusters
+        else:
+            n_rows, n_cols = mask.shape
+            new_col_clusters = np.zeros(n_cols)*np.nan
+            row_clusters_aux = np.zeros((n_row_clusters,n_cols))
+            col_clusters_aux = np.zeros((n_col_clusters+1,n_row_clusters))
+            for row in np.arange(n_rows):
+                row_cluster = row_clusters[row]
+                row_clusters_aux[row_cluster]=np.logical_or(row_clusters_aux[row_cluster],mask[row,:])
+            for col in np.arange(n_cols):
+                if col_clusters[col]==col_cluster:
+                    new_col_cluster = np.argmax((row_clusters_aux[:,col]>col_clusters_aux[[col_cluster,n_col_clusters],:]).sum(axis=1))
+                else:
+                    new_col_cluster=col_clusters[col]
+                col_clusters_aux[new_col_cluster]=np.logical_or(col_clusters_aux[new_col_cluster],row_clusters_aux[:,col])
+                new_col_clusters[col] = new_col_cluster
+
+        return new_col_clusters
+
+    def _mutation(self,mask,pop,fitness):
         new_pop = []
         for i, ind in enumerate(pop):
-            row_clusters,col_clusters = ind
-            n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
-            probs = np.concatenate((np.nansum(fitness[i],axis=0),
-                                    np.nansum(fitness[i],axis=1)),axis=0)
+            new_ind = deepcopy(ind)
+            new_row_clusters,new_col_clusters = new_ind
+            n_row_clusters, n_col_clusters = np.unique(new_row_clusters).size, np.unique(new_col_clusters).size
+            probs = np.concatenate((np.nansum(fitness[i],axis=1),
+                                    np.nansum(fitness[i],axis=0)),axis=0)
             probs = probs/probs.sum()
             choice = np.random.choice(np.arange(probs.size),p=probs)
-            if choice < n_row_clusters:
-                dim='row'
-                cluster=choice
+            if choice < self.max_row_clusters:
+                row_cluster=choice
+                if abs(n_row_clusters - self.max_row_clusters) < abs(n_row_clusters - 1):
+                    new_row_clusters=self._delete_row_cluster(mask,new_ind,row_cluster)
+                    print('deleted row')
+                else:
+                    new_row_clusters=self._split_row_cluster(mask,new_ind,row_cluster)
+                    print('splitted row')
+
             else:
-                dim='col'
-                cluster=choice-n_row_clusters
-            if dim == 'row':
-                row_clusters=self._delete_cluster(row_clusters,cluster)
-            if dim == 'col':
-                col_clusters=self._delete_cluster(col_clusters,cluster)
-            new_pop.append((row_clusters,col_clusters))
+                col_cluster=choice-self.max_row_clusters-1
+                if abs(n_col_clusters - self.max_row_clusters) < abs(n_col_clusters - 1):
+                    new_col_clusters=self._delete_col_cluster(mask,new_ind,col_cluster)
+                    print('deleted col')
+                else:
+                    new_col_clusters=self._split_col_cluster(mask,new_ind,col_cluster)
+                    print('splitted col')
+            new_pop.append((new_row_clusters,new_col_clusters))
+
         return new_pop
    
     def _replacement(self,pop,fitness,new_pop,new_fitness):
-
         fitness = np.concatenate((fitness,new_fitness),axis=0)
         probs = np.nanmean(fitness,axis=(1,2))
         best = np.argmax(probs)
+        probs[best] = 0.
         probs = probs/probs.sum()
-        probs[best] = 1.
         selected = np.random.choice(np.arange(probs.size),self.pop_size-1,replace=False,p=probs)
         pop = pop + new_pop
-        pop = pop[selected]
+        new_pop = [pop[i] for i in selected]
+        new_pop.append(pop[best])
 
-        return pop 
+        return new_pop 
             
     def _evaluate_fitness(self,data,fit_mask,test_mask,pop):
-        fitness = np.zeros((self.pop_size,self.max_row_clusters,self.max_col_clusters))*np.nan
+        fitness = np.zeros((self.pop_size,self.max_row_clusters,self.max_col_clusters))
         for i,ind in enumerate(pop):
             row_clusters,col_clusters = ind
             n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
-            models = self._initialize_models(fit_mask,ind)
-            models, scores = self._update_models(data,fit_mask,ind,models)
-            fitness[i,:n_row_clusters,:n_col_clusters] = 1/scores if self.minimize else scores
-
+            if np.all(self._check_coclusters(fit_mask,ind)):
+                models = self._initialize_models(fit_mask,ind)
+                models, scores = self._update_models(data,fit_mask,ind,models)
+                fitness[i,:n_row_clusters,:n_col_clusters] = 1/scores if self.minimize else scores
         return fitness
        
     def _init_population(self,fit_mask):
@@ -491,30 +598,46 @@ class EvolutiveScoal(BaseScoal):
         iter_count = 0
         converged = False
 
-        print('iniicializando')
+        total = time.time()
+
+        start = time.time()
+        print('inicializando')
         pop = self._init_population(fit_mask)
-        self.pop=pop     
+        print(start -time.time())
         print((self._check_population(fit_mask,pop)).all()) 
         
+        start = time.time()
         print('refinando') 
         pop = self._local_search(data,fit_mask,pop)
         self.pop = pop
+        print(start -time.time())
+        print((self._check_population(fit_mask,pop)).all()) 
 
+
+        start = time.time()
         print('calculando fitness')
         fitness = self._evaluate_fitness(data,fit_mask,test_mask,pop)
         self.fitness=fitness
+        print(start -time.time())
         print((self._check_population(fit_mask,pop)).all()) 
 
-        #print((self._check_population(fit_mask,pop)).all()) 
+        start = time.time()
+        print('fazendo mutação')
+        new_pop = self._mutation(fit_mask,pop,fitness)
+        new_fitness = self._evaluate_fitness(data,fit_mask,test_mask,new_pop)
+        print(start -time.time())
+        print((self._check_population(fit_mask,pop)).all()) 
+        print((self._check_population(fit_mask,new_pop)).all()) 
 
-        #fitness = self._evaluate_fitness(data,fit_mask,test_mask,pop)
-        #new_pop = self._mutation(pop,fitness)
-        #print((self._check_population(fit_mask,pop)).all())  
-        #new_fitness = self._evaluate_fitness(matrix,row_features,col_features,fit_mask,test_mask,pop)
-        #pop = self._replacement(pop,fitness,new_pop,new_fitness)
-        #print((self._check_population(fit_mask,pop)).all())  
+        start = time.time()
+        print('fazendo substituição')
+        print(np.nanmean(fitness,axis=(1,2)))
+        print(np.nanmean(new_fitness,axis=(1,2)))
+        pop = self._replacement(pop,fitness,new_pop,new_fitness)
+        print(start -time.time())
+        print((self._check_population(fit_mask,pop)).all()) 
 
-
+        print(total-time.time())
         # while(not converged):
         #     print(iter_count, np.nanmean(fitness,axis=(1,2)).min())
         #     iter_count+=1
