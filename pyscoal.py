@@ -15,12 +15,10 @@ class BaseScoal():
         self.scoring=mean_squared_error
         self.minimize=minimize
         self.init='smart'
-        self.random_state=42
         self.n_jobs=1
 
     def _random_init(self,mask,n_row_clusters,n_col_clusters):
         n_rows, n_cols = mask.shape
-        np.random.seed(self.random_state) 
         row_clusters = np.random.choice(np.arange(n_row_clusters),n_rows)
         col_clusters = np.random.choice(np.arange(n_col_clusters),n_cols)
         
@@ -157,8 +155,10 @@ class BaseScoal():
         rows,cols = self._get_rows_cols(coclusters,row_cluster,col_cluster)
         X, y = self._get_X_y(data,mask,rows,cols)
         model = models[row_cluster][col_cluster]
-        y_pred = model.predict(X)
-        score = self.scoring(y,y_pred)
+        score = 0
+        if y.size>0:
+            y_pred = model.predict(X)
+            score = self.scoring(y,y_pred)
 
         return score 
     
@@ -168,7 +168,7 @@ class BaseScoal():
         scores = np.zeros(rows.size)
         for row in rows:
             X, y = self._get_X_y(data,mask,[row],cols)
-            if(y.size>0):
+            if y.size>0:
                 y_pred = model.predict(X)
                 scores[row] = self.scoring(y,y_pred)
 
@@ -303,6 +303,7 @@ class SCOAL(BaseScoal):
         print('|'.join(x.ljust(15) for x in ['%i' % iter_count,'%.3f' % score,'%.3f' % delta_score,'%i' % rows_changed,'%i'  % cols_changed,'%i' % elapsed_time]))
 
     def fit(self,matrix,row_features,col_features,fit_mask=None):
+        np.random.seed(self.random_state) 
         data = (matrix,row_features,col_features)
         if fit_mask is None:
             fit_mask = np.invert(np.isnan(matrix))         
@@ -322,11 +323,11 @@ class SCOAL(BaseScoal):
         self.models, self.scores = self._update_models(data,fit_mask,self.coclusters,self.models)
         score = np.mean(self.scores)
         
+        converged = iter_count == self.max_iter 
         if self.verbose:
             self._print_status(iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time)
 
         while not converged:
-            iter_count += 1
 
             new_row_clusters, new_col_clusters = self._update_coclusters(data,fit_mask,self.coclusters,self.models)     
             rows_changed = np.sum(new_row_clusters!=self.coclusters[0])
@@ -336,15 +337,13 @@ class SCOAL(BaseScoal):
             self.models, self.scores = self._update_models(data,fit_mask,self.coclusters,self.models)
             score = np.mean(self.scores)            
             delta_score -= score
-
+            iter_count += 1
             converged = (
                 iter_count >= self.max_iter or
                 (delta_score > 0 and delta_score < self.tol) or
                 (rows_changed==0 and cols_changed==0)
             )   
-
             elapsed_time = time.time() - start
-
             if self.verbose:
                 self._print_status(iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time)
  
@@ -380,6 +379,7 @@ class EvolutiveScoal(BaseScoal):
                 estimator=LinearRegression(),
                 scoring=mean_squared_error,
                 minimize=True,
+                test_size=0.2,
                 max_iter=np.nan,
                 tol = 1e-3,
                 init='random',
@@ -393,6 +393,7 @@ class EvolutiveScoal(BaseScoal):
         self.estimator=estimator
         self.scoring=mean_squared_error
         self.minimize=minimize
+        self.test_size=test_size
         self.max_iter = max_iter
         self.tol=tol
         self.init=init
@@ -521,57 +522,66 @@ class EvolutiveScoal(BaseScoal):
             new_ind = deepcopy(ind)
             new_row_clusters,new_col_clusters = new_ind
             n_row_clusters, n_col_clusters = np.unique(new_row_clusters).size, np.unique(new_col_clusters).size
-            probs = np.concatenate((np.nansum(fitness[i],axis=1),
-                                    np.nansum(fitness[i],axis=0)),axis=0)
+            all_fitness = np.concatenate((np.nanmean(fitness[i],axis=1),np.nanmean(fitness[i],axis=0)),axis=0)
+            probs = np.divide(1,all_fitness, where=all_fitness!=0) if not self.minimize else all_fitness
+            probs[probs==0] = 1
+            probs = np.nan_to_num(probs)
             probs = probs/probs.sum()
+            if np.isnan(probs).sum() > 0 :
+                print(i)
+                print(new_ind)
+                print(all_fitness)
+                print(probs)
+                new_pop.append((new_row_clusters,new_col_clusters))
+                continue
             choice = np.random.choice(np.arange(probs.size),p=probs)
             if choice < self.max_row_clusters:
                 row_cluster=choice
                 if abs(n_row_clusters - self.max_row_clusters) < abs(n_row_clusters - 1):
                     new_row_clusters=self._delete_row_cluster(mask,new_ind,row_cluster)
-                    print('deleted row')
                 else:
                     new_row_clusters=self._split_row_cluster(mask,new_ind,row_cluster)
-                    print('splitted row')
 
             else:
-                col_cluster=choice-self.max_row_clusters-1
+                col_cluster=choice-self.max_row_clusters
                 if abs(n_col_clusters - self.max_row_clusters) < abs(n_col_clusters - 1):
                     new_col_clusters=self._delete_col_cluster(mask,new_ind,col_cluster)
-                    print('deleted col')
                 else:
                     new_col_clusters=self._split_col_cluster(mask,new_ind,col_cluster)
-                    print('splitted col')
             new_pop.append((new_row_clusters,new_col_clusters))
 
         return new_pop
    
     def _replacement(self,pop,fitness,new_pop,new_fitness):
-        fitness = np.concatenate((fitness,new_fitness),axis=0)
-        probs = np.nanmean(fitness,axis=(1,2))
-        best = np.argmax(probs)
+        all_fitness = np.nanmean(np.concatenate((fitness,new_fitness),axis=0),axis=(1,2))
+        best = np.nanargmin(all_fitness) if self.minimize else np.nanargmax(all_fitness)
+        probs = np.divide(1,all_fitness, where=all_fitness!=0) if self.minimize else all_fitness
+        probs[probs==0] = 1
+        probs = np.nan_to_num(probs)
         probs[best] = 0.
         probs = probs/probs.sum()
-        selected = np.random.choice(np.arange(probs.size),self.pop_size-1,replace=False,p=probs)
+        choice = np.random.choice(np.arange(probs.size),self.pop_size-1,replace=False,p=probs)
         pop = pop + new_pop
-        new_pop = [pop[i] for i in selected]
+        new_pop = [pop[i] for i in choice]
         new_pop.append(pop[best])
+        fitness = np.concatenate((fitness,new_fitness),axis=0)
+        new_fitness = fitness[[best]+choice.tolist(),:,:]
 
-        return new_pop 
+        return new_pop, new_fitness
             
     def _evaluate_fitness(self,data,fit_mask,test_mask,pop):
-        fitness = np.zeros((self.pop_size,self.max_row_clusters,self.max_col_clusters))
+        fitness = np.zeros((self.pop_size,self.max_row_clusters,self.max_col_clusters))*np.nan
         for i,ind in enumerate(pop):
             row_clusters,col_clusters = ind
             n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
             if np.all(self._check_coclusters(fit_mask,ind)):
                 models = self._initialize_models(fit_mask,ind)
-                models, scores = self._update_models(data,fit_mask,ind,models)
-                fitness[i,:n_row_clusters,:n_col_clusters] = 1/scores if self.minimize else scores
+                models, _ = self._update_models(data,fit_mask,ind,models)
+                scores = self._score_coclusters(data,test_mask,ind,models)
+                fitness[i,:n_row_clusters,:n_col_clusters] = scores
         return fitness
        
     def _init_population(self,fit_mask):
-        np.random.seed(self.random_state) 
         n_row_clusters = np.random.randint(1,self.max_row_clusters+1,self.pop_size)
         n_col_clusters = np.random.randint(1,self.max_col_clusters+1,self.pop_size)
         pop = [(self._initialize_coclusters(fit_mask,i,j)) for i,j in zip(n_row_clusters,n_col_clusters)]
@@ -585,62 +595,99 @@ class EvolutiveScoal(BaseScoal):
 
         return valid
 
+    def _print_status(self,iter_count,pop,fitness,delta_score,elapsed_time):
+        scores = np.nanmean(fitness,axis=(1,2))
+        best_score = scores.min() if self.minimize else scores.max()
+        worst_score = scores.max() if self.minimize else scores.min()
+        mean_score = scores.mean()
+        sizes = np.array([(np.max(ind[0])+1)*(np.max(ind[1])+1) for ind in pop])
+        max_size = sizes.max()
+        min_size = sizes.min()
+        mean_size = sizes.mean()
+        if iter_count==0:
+            print('|'.join(x.ljust(11) for x in [
+                    'iteration','delta score','best score','worst score', 'mean score','max size','min size','mean size', 'elapsed time (s)']))
+
+        print('|'.join(x.ljust(11) for x in ['%i' % iter_count,'%.3f' % delta_score,'%.3f' % best_score,'%.3f' % worst_score,'%.3f'  % mean_score,'%i'  % max_size,'%i'  % min_size,'%i'  % mean_size, '%i' % elapsed_time]))
+
     def fit(self,matrix,row_features,col_features,fit_mask=None):
+        np.random.seed(self.random_state) 
         data = matrix, row_features, col_features
         if fit_mask is None:
             fit_mask = np.invert(np.isnan(matrix)) 
-        test = np.random.choice(np.arange(fit_mask.sum()), int(fit_mask.sum()*0.3),replace=False)
+        test = np.random.choice(np.arange(fit_mask.sum()), int(fit_mask.sum()*self.test_size),replace=False)
         rows,cols = np.where(fit_mask)
         test_mask = np.zeros(fit_mask.shape).astype(bool)
         test_mask[rows[test],cols[test]] = True
         fit_mask[rows[test],cols[test]] = False
+        self.test_mask=test_mask
+        self.fit_mask=fit_mask
 
         iter_count = 0
         converged = False
-
-        total = time.time()
-
+        delta_score = np.nan
+        elapsed_time = 0
         start = time.time()
-        print('inicializando')
+
         pop = self._init_population(fit_mask)
-        print(start -time.time())
-        print((self._check_population(fit_mask,pop)).all()) 
-        
-        start = time.time()
-        print('refinando') 
-        pop = self._local_search(data,fit_mask,pop)
-        self.pop = pop
-        print(start -time.time())
-        print((self._check_population(fit_mask,pop)).all()) 
-
-
-        start = time.time()
-        print('calculando fitness')
         fitness = self._evaluate_fitness(data,fit_mask,test_mask,pop)
+        self.pop = pop
         self.fitness=fitness
-        print(start -time.time())
-        print((self._check_population(fit_mask,pop)).all()) 
+        score = np.nanmean(fitness,axis=(1,2)).min() if self.minimize else np.nanmean(fitness,axis=(1,2)).max()
+        converged = (
+                iter_count == self.max_iter or 
+                (delta_score > 0 and delta_score < self.tol)
+            )
+        if self.verbose:
+            self._print_status(iter_count,pop,fitness,delta_score,elapsed_time)
+        
+        while not converged:
+        
+            pop = self._local_search(data,fit_mask,pop)
+            fitness = self._evaluate_fitness(data,fit_mask,test_mask,pop)
+            new_pop = self._mutation(fit_mask,pop,fitness)
+            new_fitness = self._evaluate_fitness(data,fit_mask,test_mask,new_pop)
+            pop,fitness = self._replacement(pop,fitness,new_pop,new_fitness)
+            self.pop = pop
+            self.fitness=fitness
+            delta_score = score
+            score = np.nanmean(fitness,axis=(1,2)).min() if self.minimize else np.nanmean(fitness,axis=(1,2)).max()
+            delta_score -= score
+            iter_count+=1
+            converged = (
+                iter_count == self.max_iter or 
+                (delta_score > 0 and delta_score < self.tol)
+            )
+            elapsed_time = time.time() - start
+            if self.verbose:
+                self._print_status(iter_count,pop,fitness,delta_score,elapsed_time)
+        self.coclusters = self.pop[np.nanmean(fitness,axis=(1,2)).argmin() if self.minimize else np.nanmean(fitness,axis=(1,2)).argmax()]
+        self.n_row_clusters, self.n_col_clusters  = np.unique(pop[-1][0]).size, np.unique(pop[-1][1]).size
+        self.models = self._initialize_models(fit_mask,self.coclusters)
+        self.models,_ = self._update_models(data,fit_mask,self.coclusters,self.models)
 
-        start = time.time()
-        print('fazendo mutação')
-        new_pop = self._mutation(fit_mask,pop,fitness)
-        new_fitness = self._evaluate_fitness(data,fit_mask,test_mask,new_pop)
-        print(start -time.time())
-        print((self._check_population(fit_mask,pop)).all()) 
-        print((self._check_population(fit_mask,new_pop)).all()) 
+        
+    def predict(self,matrix,row_features,col_features,pred_mask=None):
+        data = (matrix,row_features,col_features)
+        if pred_mask is None:
+            pred_mask = np.isnan(matrix)
+        pred_matrix = matrix.copy()
+        results = self._predict_coclusters(data,pred_mask,self.coclusters,self.models)
+        for i in range(self.n_row_clusters):
+            for j in range(self.n_col_clusters):
+                cocluster_mask = self._get_bool_mask(self.coclusters,i,j)
+                pred_matrix[cocluster_mask&pred_mask] = results[i][j]
 
-        start = time.time()
-        print('fazendo substituição')
-        print(np.nanmean(fitness,axis=(1,2)))
-        print(np.nanmean(new_fitness,axis=(1,2)))
-        pop = self._replacement(pop,fitness,new_pop,new_fitness)
-        print(start -time.time())
-        print((self._check_population(fit_mask,pop)).all()) 
+        return pred_matrix
 
-        print(total-time.time())
-        # while(not converged):
-        #     print(iter_count, np.nanmean(fitness,axis=(1,2)).min())
-        #     iter_count+=1
-        #     converged = iter_count > self.max_iter
+    def score(self,matrix,row_features,col_features,pred_mask=None):
+        data = (matrix,row_features,col_features)
+        if pred_mask is None:
+            pred_mask = np.invert(np.isnan(matrix))
+        scores = self._score_coclusters(data,pred_mask,self.coclusters,self.models)
+        score = np.mean(np.array(scores))
+
+        return score
+
 
   
