@@ -44,6 +44,8 @@ class BaseScoal():
     def _initialize_coclusters(self,mask,n_row_clusters,n_col_clusters):
         if self.init=='smart':
             row_clusters, col_clusters = self._smart_init(mask,n_row_clusters,n_col_clusters)
+        elif isinstance(self.init,(list,np.ndarray)):
+            row_clusters, col_clusters = self.init[0], self.init[1]
         else:
             row_clusters, col_clusters = self._random_init(mask,n_row_clusters,n_col_clusters)
         coclusters = (row_clusters, col_clusters)
@@ -381,7 +383,7 @@ class EvolutiveScoal(BaseScoal):
                 minimize=True,
                 test_size=0.2,
                 max_iter=np.nan,
-                tol = 1e-3,
+                tol = 1e-4,
                 init='random',
                 random_state=42,
                 n_jobs=1,
@@ -529,10 +531,7 @@ class EvolutiveScoal(BaseScoal):
             probs = probs/probs.sum()
             if np.isnan(probs).sum() > 0 :
                 print(i)
-                print(new_ind)
-                print(all_fitness)
-                print(probs)
-                new_pop.append((new_row_clusters,new_col_clusters))
+                print('invalid solution found')
                 continue
             choice = np.random.choice(np.arange(probs.size),p=probs)
             if choice < self.max_row_clusters:
@@ -661,6 +660,7 @@ class EvolutiveScoal(BaseScoal):
             elapsed_time = time.time() - start
             if self.verbose:
                 self._print_status(iter_count,pop,fitness,delta_score,elapsed_time)
+        self.n_iter = iter_count
         self.coclusters = self.pop[np.nanmean(fitness,axis=(1,2)).argmin() if self.minimize else np.nanmean(fitness,axis=(1,2)).argmax()]
         self.n_row_clusters, self.n_col_clusters  = np.unique(pop[-1][0]).size, np.unique(pop[-1][1]).size
         self.models = self._initialize_models(fit_mask,self.coclusters)
