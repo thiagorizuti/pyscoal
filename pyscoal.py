@@ -44,7 +44,7 @@ class BaseScoal():
     def _initialize_coclusters(self,mask,n_row_clusters,n_col_clusters):
         if self.init=='smart':
             row_clusters, col_clusters = self._smart_init(mask,n_row_clusters,n_col_clusters)
-        elif isinstance(self.init,(list,np.ndarray)):
+        elif isinstance(self.init,(list,tuple,np.ndarray)):
             row_clusters, col_clusters = self.init[0], self.init[1]
         else:
             row_clusters, col_clusters = self._random_init(mask,n_row_clusters,n_col_clusters)
@@ -348,7 +348,8 @@ class SCOAL(BaseScoal):
             elapsed_time = time.time() - start
             if self.verbose:
                 self._print_status(iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time)
- 
+        self.n_iter = iter_count
+        
     def predict(self,matrix,row_features,col_features,pred_mask=None):
         data = (matrix,row_features,col_features)
         if pred_mask is None:
@@ -406,6 +407,8 @@ class EvolutiveScoal(BaseScoal):
     def _local_search(self,data,fit_mask,pop):
         new_pop = []
         for ind in pop:
+            if not np.all(self._check_coclusters(fit_mask,ind)):
+                continue
             models = self._initialize_models(fit_mask,ind)
             models,_ = self._update_models(data,fit_mask,ind,models)
             new_row_clusters,new_col_clusters = self._update_coclusters(data,fit_mask,ind,models)
@@ -521,6 +524,8 @@ class EvolutiveScoal(BaseScoal):
     def _mutation(self,mask,pop,fitness):
         new_pop = []
         for i, ind in enumerate(pop):
+            if not np.all(self._check_coclusters(mask,ind)):
+                continue
             new_ind = deepcopy(ind)
             new_row_clusters,new_col_clusters = new_ind
             n_row_clusters, n_col_clusters = np.unique(new_row_clusters).size, np.unique(new_col_clusters).size
@@ -529,10 +534,6 @@ class EvolutiveScoal(BaseScoal):
             probs[probs==0] = 1
             probs = np.nan_to_num(probs)
             probs = probs/probs.sum()
-            if np.isnan(probs).sum() > 0 :
-                print(i)
-                print('invalid solution found')
-                continue
             choice = np.random.choice(np.arange(probs.size),p=probs)
             if choice < self.max_row_clusters:
                 row_cluster=choice
@@ -629,6 +630,9 @@ class EvolutiveScoal(BaseScoal):
         start = time.time()
 
         pop = self._init_population(fit_mask)
+        valid_solutions = self._check_population(fit_mask,pop)
+        if not np.all(valid_solutions):
+            print('invalid solution at initialization')
         fitness = self._evaluate_fitness(data,fit_mask,test_mask,pop)
         self.pop = pop
         self.fitness=fitness
@@ -643,6 +647,9 @@ class EvolutiveScoal(BaseScoal):
         while not converged:
         
             pop = self._local_search(data,fit_mask,pop)
+            valid_solutions = self._check_population(fit_mask,pop)
+            if not np.all(valid_solutions):
+                print('invalid solution at scoal')
             fitness = self._evaluate_fitness(data,fit_mask,test_mask,pop)
             new_pop = self._mutation(fit_mask,pop,fitness)
             new_fitness = self._evaluate_fitness(data,fit_mask,test_mask,new_pop)
