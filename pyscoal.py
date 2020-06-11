@@ -122,7 +122,8 @@ class BaseScoal():
         rows,cols = self._get_rows_cols(coclusters,row_cluster,col_cluster)
         X, y = self._get_X_y(data,mask,rows,cols)
         model = models[row_cluster][col_cluster]
-        model.fit(X,y)
+        if y.size > 0:
+            model.fit(X,y)
 
         return model
 
@@ -139,9 +140,11 @@ class BaseScoal():
         rows,cols = self._get_rows_cols(coclusters,row_cluster,col_cluster)
         X, y = self._get_X_y(data,mask,rows,cols)
         model = models[row_cluster][col_cluster]
-        model.fit(X,y)
-        y_pred = model.predict(X)
-        score = self.scoring(y,y_pred)
+        score = 0
+        if y.size > 0:
+            model.fit(X,y)
+            y_pred = model.predict(X)
+            score = self.scoring(y,y_pred)
 
         return model, score  
     
@@ -158,7 +161,7 @@ class BaseScoal():
         X, y = self._get_X_y(data,mask,rows,cols)
         model = models[row_cluster][col_cluster]
         score = 0
-        if y.size>0:
+        if y.size > 0:
             y_pred = model.predict(X)
             score = self.scoring(y,y_pred)
 
@@ -170,7 +173,7 @@ class BaseScoal():
         scores = np.zeros(rows.size)
         for row in rows:
             X, y = self._get_X_y(data,mask,[row],cols)
-            if y.size>0:
+            if y.size > 0:
                 y_pred = model.predict(X)
                 scores[row] = self.scoring(y,y_pred)
 
@@ -182,7 +185,7 @@ class BaseScoal():
         scores = np.zeros(cols.size)
         for col in cols:
             X, y = self._get_X_y(data,mask,rows,[col])
-            if(y.size>0):
+            if y.size > 0:
                 y_pred = model.predict(X)
                 scores[col] = self.scoring(y,y_pred)
 
@@ -572,13 +575,14 @@ class EvolutiveScoal(BaseScoal):
     def _evaluate_fitness(self,data,fit_mask,test_mask,pop):
         fitness = np.zeros((self.pop_size,self.max_row_clusters,self.max_col_clusters))*np.nan
         for i,ind in enumerate(pop):
+            if not np.all(self._check_coclusters(fit_mask,ind)):
+                continue
             row_clusters,col_clusters = ind
             n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
-            if np.all(self._check_coclusters(fit_mask,ind)):
-                models = self._initialize_models(fit_mask,ind)
-                models, _ = self._update_models(data,fit_mask,ind,models)
-                scores = self._score_coclusters(data,test_mask,ind,models)
-                fitness[i,:n_row_clusters,:n_col_clusters] = scores
+            models = self._initialize_models(fit_mask,ind)
+            models, _ = self._update_models(data,fit_mask,ind,models)
+            scores = self._score_coclusters(data,test_mask,ind,models)
+            fitness[i,:n_row_clusters,:n_col_clusters] = scores
         return fitness
        
     def _init_population(self,fit_mask):
@@ -645,7 +649,7 @@ class EvolutiveScoal(BaseScoal):
             self._print_status(iter_count,pop,fitness,delta_score,elapsed_time)
         
         while not converged:
-        
+
             pop = self._local_search(data,fit_mask,pop)
             valid_solutions = self._check_population(fit_mask,pop)
             if not np.all(valid_solutions):
