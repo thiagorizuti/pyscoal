@@ -667,9 +667,10 @@ class EvolutiveScoal(BaseScoal):
             elapsed_time = time.time() - start
             if self.verbose:
                 self._print_status(iter_count,pop,fitness,delta_score,elapsed_time)
+        fit_mask = np.logical_or(fit_mask,test_mask)
         self.n_iter = iter_count
         self.coclusters = self.pop[np.nanmean(fitness,axis=(1,2)).argmin() if self.minimize else np.nanmean(fitness,axis=(1,2)).argmax()]
-        self.n_row_clusters, self.n_col_clusters  = np.unique(pop[-1][0]).size, np.unique(pop[-1][1]).size
+        self.n_row_clusters, self.n_col_clusters  = np.unique(self.coclusters[0]).size, np.unique(self.coclusters[1]).size
         self.models = self._initialize_models(fit_mask,self.coclusters)
         self.models,_ = self._update_models(data,fit_mask,self.coclusters,self.models)
 
