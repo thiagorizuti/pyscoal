@@ -4,18 +4,22 @@ from sklearn.base import clone
 from copy import deepcopy
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, Memory
 from sklearn.utils.validation import check_is_fitted
+
+
 
 
 class BaseScoal():
 
-    def __init__(self,estimator=LinearRegression(),scoring=mean_squared_error,minimize=True,init='random',random_state=42,n_jobs=1):
-        self.estimator = estimator()
+    def __init__(self,estimator=LinearRegression(),scoring=mean_squared_error,minimize=True,init='random',random_state=42,n_jobs=1,cache=False):
+        self.estimator = estimator
         self.scoring=mean_squared_error
         self.minimize=minimize
-        self.init='smart'
+        self.init='random'
         self.n_jobs=1
+        self.cache=cache
+        
 
     def _random_init(self,mask,n_row_clusters,n_col_clusters):
         n_rows, n_cols = mask.shape
@@ -118,12 +122,20 @@ class BaseScoal():
 
         return X, y
 
+    def _cached_fit(self,model,X,y,rows,cols):
+        model.fit(X,y)
+        
+        return model
+
     def _fit(self,data,mask,coclusters,models,row_cluster,col_cluster):
         rows,cols = self._get_rows_cols(coclusters,row_cluster,col_cluster)
         X, y = self._get_X_y(data,mask,rows,cols)
         model = models[row_cluster][col_cluster]
         if y.size > 0:
-            model.fit(X,y)
+            if self.cache:
+                model = self._cached_fit(model,X,y,rows,cols)
+            else:
+                model.fit(X,y)
 
         return model
 
@@ -131,7 +143,10 @@ class BaseScoal():
         rows,cols = self._get_rows_cols(coclusters,row_cluster,col_cluster)
         X, y = self._get_X_y(data,mask,rows,cols)
         model = models[row_cluster][col_cluster]
-        model.fit(X,y)
+        if self.cache:
+            model = self._cached_fit(model,X,y,rows,cols)
+        else:
+            model.fit(X,y)
         y_pred = model.predict(X)
 
         return model, y_pred 
@@ -142,7 +157,10 @@ class BaseScoal():
         model = models[row_cluster][col_cluster]
         score = 0
         if y.size > 0:
-            model.fit(X,y)
+            if self.cache:
+                model = self._cached_fit(model,X,y,rows,cols)
+            else:
+                model.fit(X,y)
             y_pred = model.predict(X)
             score = self.scoring(y,y_pred)
 
@@ -282,9 +300,9 @@ class SCOAL(BaseScoal):
                 scoring=mean_squared_error,
                 minimize = True,
                 init='random',
-                inner_convergence=False,
                 random_state=42,
                 n_jobs=1,
+                cache=False,
                 verbose=False):
         
         self.estimator = estimator
@@ -295,9 +313,9 @@ class SCOAL(BaseScoal):
         self.scoring = scoring
         self.minimize = minimize
         self.init = init
-        self.inner_convergence = inner_convergence
         self.random_state = random_state
         self.n_jobs = n_jobs
+        self.cache=cache
         self.verbose = verbose
 
     def _print_status(self,iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time):
@@ -313,6 +331,11 @@ class SCOAL(BaseScoal):
         if fit_mask is None:
             fit_mask = np.invert(np.isnan(matrix))         
 
+        
+        if self.cache:
+            self.memory = Memory('./pyscoal-cache')
+            self.method = self.memory.cache(self._cached_fit, ignore=['self','model','X','y','rows','cols'])
+
         iter_count=0 
         elapsed_time = 0
         rows_changed = 0
@@ -324,7 +347,6 @@ class SCOAL(BaseScoal):
 
         self.coclusters = self._initialize_coclusters(fit_mask,self.n_row_clusters,self.n_col_clusters)
         self.models = self._initialize_models(fit_mask,self.coclusters)
-
         self.models, self.scores = self._update_models(data,fit_mask,self.coclusters,self.models)
         score = np.mean(self.scores)
         
@@ -351,7 +373,10 @@ class SCOAL(BaseScoal):
             elapsed_time = time.time() - start
             if self.verbose:
                 self._print_status(iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time)
+        self.elapsed_time = elapsed_time
         self.n_iter = iter_count
+        if self.cache:
+            self.memory.clear(warn=False)
         
     def predict(self,matrix,row_features,col_features,pred_mask=None):
         data = (matrix,row_features,col_features)
@@ -381,7 +406,7 @@ class EvolutiveScoal(BaseScoal):
     def __init__(self,
                 max_row_clusters=10,
                 max_col_clusters=10,
-                pop_size=20,
+                pop_size=10,
                 estimator=LinearRegression(),
                 scoring=mean_squared_error,
                 minimize=True,
@@ -391,6 +416,7 @@ class EvolutiveScoal(BaseScoal):
                 init='random',
                 random_state=42,
                 n_jobs=1,
+                cache=False,
                 verbose=False):
 
         self.max_row_clusters=max_row_clusters
@@ -405,6 +431,7 @@ class EvolutiveScoal(BaseScoal):
         self.init=init
         self.random_state=random_state
         self.n_jobs=n_jobs
+        self.cache=cache
         self.verbose=verbose
 
     def _local_search(self,data,fit_mask,pop):
@@ -627,6 +654,10 @@ class EvolutiveScoal(BaseScoal):
         self.test_mask=test_mask
         self.fit_mask=fit_mask
 
+        if self.cache:
+            self.memory = Memory('./pyscoal-cache')
+            self.method = self.memory.cache(self._cached_fit, ignore=['self','model','X','y','rows','cols'])
+
         iter_count = 0
         converged = False
         delta_score = np.nan
@@ -634,9 +665,6 @@ class EvolutiveScoal(BaseScoal):
         start = time.time()
 
         pop = self._init_population(fit_mask)
-        valid_solutions = self._check_population(fit_mask,pop)
-        if not np.all(valid_solutions):
-            print('invalid solution at initialization')
         fitness = self._evaluate_fitness(data,fit_mask,test_mask,pop)
         self.pop = pop
         self.fitness=fitness
@@ -651,9 +679,6 @@ class EvolutiveScoal(BaseScoal):
         while not converged:
 
             pop = self._local_search(data,fit_mask,pop)
-            valid_solutions = self._check_population(fit_mask,pop)
-            if not np.all(valid_solutions):
-                print('invalid solution at scoal')
             fitness = self._evaluate_fitness(data,fit_mask,test_mask,pop)
             new_pop = self._mutation(fit_mask,pop,fitness)
             new_fitness = self._evaluate_fitness(data,fit_mask,test_mask,new_pop)
@@ -671,12 +696,15 @@ class EvolutiveScoal(BaseScoal):
             elapsed_time = time.time() - start
             if self.verbose:
                 self._print_status(iter_count,pop,fitness,delta_score,elapsed_time)
-        fit_mask = np.logical_or(fit_mask,test_mask)
+        self.elapsed_time = elapsed_time
         self.n_iter = iter_count
+        fit_mask = np.logical_or(fit_mask,test_mask)
         self.coclusters = self.pop[np.nanmean(fitness,axis=(1,2)).argmin() if self.minimize else np.nanmean(fitness,axis=(1,2)).argmax()]
         self.n_row_clusters, self.n_col_clusters  = np.unique(self.coclusters[0]).size, np.unique(self.coclusters[1]).size
         self.models = self._initialize_models(fit_mask,self.coclusters)
         self.models,_ = self._update_models(data,fit_mask,self.coclusters,self.models)
+        if self.cache:
+            self.memory.clear(warn=False)
 
         
     def predict(self,matrix,row_features,col_features,pred_mask=None):
