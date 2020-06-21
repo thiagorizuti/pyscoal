@@ -412,6 +412,7 @@ class EvolutiveScoal(BaseScoal):
                 minimize=True,
                 test_size=0.2,
                 max_iter=np.nan,
+                n_scoal_iters=1,
                 tol = 1e-4,
                 init='random',
                 random_state=42,
@@ -427,6 +428,7 @@ class EvolutiveScoal(BaseScoal):
         self.minimize=minimize
         self.test_size=test_size
         self.max_iter = max_iter
+        self.n_scoal_iters = n_scoal_iters
         self.tol=tol
         self.init=init
         self.random_state=random_state
@@ -437,11 +439,14 @@ class EvolutiveScoal(BaseScoal):
     def _local_search(self,data,fit_mask,pop):
         new_pop = []
         for ind in pop:
-            if not np.all(self._check_coclusters(fit_mask,ind)):
-                continue
-            models = self._initialize_models(fit_mask,ind)
-            models,_ = self._update_models(data,fit_mask,ind,models)
-            new_row_clusters,new_col_clusters = self._update_coclusters(data,fit_mask,ind,models)
+            iter_count = 0
+            while iter_count < self.n_scoal_iters: 
+                if not np.all(self._check_coclusters(fit_mask,ind)):
+                    continue
+                models = self._initialize_models(fit_mask,ind)
+                models,_ = self._update_models(data,fit_mask,ind,models)
+                new_row_clusters,new_col_clusters = self._update_coclusters(data,fit_mask,ind,models)
+                ind = (new_row_clusters,new_col_clusters)
             new_pop.append((new_row_clusters,new_col_clusters))
 
         return new_pop  
