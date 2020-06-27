@@ -10,7 +10,7 @@ from sklearn.utils.validation import check_is_fitted
 
 
 
-class BaseScoal():
+class BaseSCOAL():
 
     def __init__(self,estimator=LinearRegression(),scoring=mean_squared_error,minimize=True,init='random',random_state=42,n_jobs=1,cache=False):
         self.estimator = estimator
@@ -289,7 +289,7 @@ class BaseScoal():
         return scores
 
 
-class SCOAL(BaseScoal):
+class SCOAL(BaseSCOAL):
     
     def __init__(self, 
                 estimator=LinearRegression(), 
@@ -400,8 +400,64 @@ class SCOAL(BaseScoal):
 
         return score
 
+class MSCOAL(BaseSCOAL):
+    
+    def __init__(self, 
+                estimator=LinearRegression(), 
+                tol = 1e-4, 
+                max_iter = np.nan,
+                scoring=mean_squared_error,
+                minimize = True,
+                init='random',
+                random_state=42,
+                n_jobs=1,
+                cache=False,
+                verbose=False):
+        
+        self.estimator = estimator
+        self.tol = tol
+        self.max_iter = max_iter
+        self.scoring = scoring
+        self.minimize = minimize
+        self.init = init
+        self.random_state = random_state
+        self.n_jobs = n_jobs
+        self.cache=cache
+        self.verbose = verbose
 
-class EvolutiveScoal(BaseScoal):
+    def _print_status(self,iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time):
+        if iter_count==0:
+            print('|'.join(x.ljust(15) for x in [
+                    'iteration',' score','delta score','rows changed', 'columns changed', 'elapsed time (s)']))
+
+        print('|'.join(x.ljust(15) for x in ['%i' % iter_count,'%.3f' % score,'%.3f' % delta_score,'%i' % rows_changed,'%i'  % cols_changed,'%i' % elapsed_time]))
+
+    def fit(self,matrix,row_features,col_features,fit_mask=None):
+       pass
+    
+    def predict(self,matrix,row_features,col_features,pred_mask=None):
+        data = (matrix,row_features,col_features)
+        if pred_mask is None:
+            pred_mask = np.isnan(matrix)
+        pred_matrix = matrix.copy()
+        results = self._predict_coclusters(data,pred_mask,self.coclusters,self.models)
+        for i in range(self.n_row_clusters):
+            for j in range(self.n_col_clusters):
+                cocluster_mask = self._get_bool_mask(self.coclusters,i,j)
+                pred_matrix[cocluster_mask&pred_mask] = results[i][j]
+
+        return pred_matrix
+    
+    def score(self,matrix,row_features,col_features,pred_mask=None):
+        data = (matrix,row_features,col_features)
+        if pred_mask is None:
+            pred_mask = np.invert(np.isnan(matrix))
+        scores = self._score_coclusters(data,pred_mask,self.coclusters,self.models)
+        score = np.mean(np.array(scores))
+
+        return score
+
+class EvoSCOAL(BaseSCOAL):
     
     def __init__(self,
                 max_row_clusters=10,
