@@ -7,15 +7,34 @@ from sklearn.metrics import mean_squared_error
 from joblib import Parallel, delayed, Memory
 from sklearn.utils.validation import check_is_fitted
 
-class BaseSCOAL():
+class SCOAL():
 
-    def __init__(self,estimator=LinearRegression(),scoring=mean_squared_error,minimize=True,init='random',random_state=42,n_jobs=1,cache=False):
+    def __init__(self, 
+                estimator=LinearRegression(), 
+                n_row_clusters = 2, 
+                n_col_clusters = 2,
+                tol = 1e-4, 
+                max_iter = 100,
+                scoring=mean_squared_error,
+                minimize = True,
+                init='random',
+                random_state=42,
+                n_jobs=1,
+                cache=False,
+                verbose=False):
+
         self.estimator = estimator
-        self.scoring=mean_squared_error
-        self.minimize=minimize
-        self.init='random'
-        self.n_jobs=1
+        self.n_row_clusters = n_row_clusters
+        self.n_col_clusters = n_col_clusters
+        self.tol = tol
+        self.max_iter = max_iter
+        self.scoring = scoring
+        self.minimize = minimize
+        self.init = init
+        self.random_state = random_state
+        self.n_jobs = n_jobs
         self.cache=cache
+        self.verbose = verbose
         
 
     def _random_init(self,mask,n_row_clusters,n_col_clusters):
@@ -42,10 +61,10 @@ class BaseSCOAL():
     
         return row_clusters.astype(int),col_clusters.astype(int)
 
-    def _initialize_coclusters(self,mask,n_row_clusters,n_col_clusters):
-        if self.init=='smart':
+    def _initialize_coclusters(self,mask,n_row_clusters,n_col_clusters,how):
+        if how=='smart':
             row_clusters, col_clusters = self._smart_init(mask,n_row_clusters,n_col_clusters)
-        elif isinstance(self.init,(list,tuple,np.ndarray)):
+        elif isinstance(how,(list,tuple,np.ndarray)):
             row_clusters, col_clusters = self.init[0], self.init[1]
         else:
             row_clusters, col_clusters = self._random_init(mask,n_row_clusters,n_col_clusters)
@@ -285,42 +304,52 @@ class BaseSCOAL():
         
         return scores
 
-
-class SCOAL(BaseSCOAL):
-    
-    def __init__(self, 
-                estimator=LinearRegression(), 
-                n_row_clusters = 2, 
-                n_col_clusters = 2,
-                tol = 1e-4, 
-                max_iter = np.nan,
-                scoring=mean_squared_error,
-                minimize = True,
-                init='random',
-                random_state=42,
-                n_jobs=1,
-                cache=False,
-                verbose=False):
-        
-        self.estimator = estimator
-        self.n_row_clusters = n_row_clusters
-        self.n_col_clusters = n_col_clusters
-        self.tol = tol
-        self.max_iter = max_iter
-        self.scoring = scoring
-        self.minimize = minimize
-        self.init = init
-        self.random_state = random_state
-        self.n_jobs = n_jobs
-        self.cache=cache
-        self.verbose = verbose
-
     def _print_status(self,iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time):
         if iter_count==0:
             print('|'.join(x.ljust(15) for x in [
                     'iteration',' score','delta score','rows changed', 'columns changed', 'elapsed time (s)']))
 
         print('|'.join(x.ljust(15) for x in ['%i' % iter_count,'%.3f' % score,'%.3f' % delta_score,'%i' % rows_changed,'%i'  % cols_changed,'%i' % elapsed_time]))
+
+    def _converge_scoal(self,data,fit_mask,coclusters,models,verbose):
+        iter_count=0 
+        elapsed_time = 0
+        rows_changed = 0
+        cols_changed = 0
+        score = np.nan
+        delta_score=np.nan
+        converged = False
+        start = time.time()
+
+        models, scores = self._update_models(data,fit_mask,coclusters,models)
+        score = np.mean(scores)
+
+        converged = iter_count == self.max_iter 
+        if verbose:
+            self._print_status(iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time)
+        
+        while not converged:
+            new_row_clusters, new_col_clusters = self._update_coclusters(data,fit_mask,coclusters,models)     
+            rows_changed = np.sum(new_row_clusters!=coclusters[0])
+            cols_changed = np.sum(new_col_clusters!=coclusters[1])
+            coclusters = (new_row_clusters, new_col_clusters)
+            delta_score = score
+            models, scores = self._update_models(data,fit_mask,coclusters,models)
+            score = np.mean(scores)            
+            delta_score -= score
+            iter_count += 1
+            converged = (
+                iter_count >= self.max_iter or
+                (delta_score > 0 and delta_score < self.tol) or
+                (rows_changed==0 and cols_changed==0)
+            )   
+            elapsed_time = time.time() - start
+            if verbose:
+                self._print_status(iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time)
+        self.elapsed_time = elapsed_time
+        self.n_iter = iter_count
+
+        return coclusters,models
 
     def fit(self,matrix,row_features,col_features,fit_mask=None):
         np.random.seed(self.random_state) 
@@ -332,46 +361,13 @@ class SCOAL(BaseSCOAL):
         if self.cache:
             self.memory = Memory('./pyscoal-cache')
             self.method = self.memory.cache(self._cached_fit, ignore=['self','model','X','y','rows','cols'])
+       
 
-        iter_count=0 
-        elapsed_time = 0
-        rows_changed = 0
-        cols_changed = 0
-        score = np.nan
-        delta_score=np.nan
-        converged = False
-        start = time.time()
-
-        self.coclusters = self._initialize_coclusters(fit_mask,self.n_row_clusters,self.n_col_clusters)
+        self.coclusters = self._initialize_coclusters(fit_mask,self.n_row_clusters,self.n_col_clusters,self.init)
         self.models = self._initialize_models(fit_mask,self.coclusters)
-        self.models, self.scores = self._update_models(data,fit_mask,self.coclusters,self.models)
-        score = np.mean(self.scores)
         
-        converged = iter_count == self.max_iter 
-        if self.verbose:
-            self._print_status(iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time)
+        self.coclusters,self.models = self._converge_scoal(data,fit_mask,self.coclusters,self.models,self.verbose)
 
-        while not converged:
-
-            new_row_clusters, new_col_clusters = self._update_coclusters(data,fit_mask,self.coclusters,self.models)     
-            rows_changed = np.sum(new_row_clusters!=self.coclusters[0])
-            cols_changed = np.sum(new_col_clusters!=self.coclusters[1])
-            self.coclusters = (np.copy(new_row_clusters), np.copy(new_col_clusters))
-            delta_score = score
-            self.models, self.scores = self._update_models(data,fit_mask,self.coclusters,self.models)
-            score = np.mean(self.scores)            
-            delta_score -= score
-            iter_count += 1
-            converged = (
-                iter_count >= self.max_iter or
-                (delta_score > 0 and delta_score < self.tol) or
-                (rows_changed==0 and cols_changed==0)
-            )   
-            elapsed_time = time.time() - start
-            if self.verbose:
-                self._print_status(iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time)
-        self.elapsed_time = elapsed_time
-        self.n_iter = iter_count
         if self.cache:
             self.memory.clear(warn=False)
         
@@ -397,19 +393,172 @@ class SCOAL(BaseSCOAL):
 
         return score
 
+class MSCOAL(SCOAL):
+    
+    def __init__(self, 
+                estimator=LinearRegression(), 
+                tol = 1e-4, 
+                max_iter = 100,
+                scoring=mean_squared_error,
+                minimize = True,
+                test_size=0.2,
+                init='random',
+                random_state=42,
+                n_jobs=1,
+                cache=False,
+                verbose=False):
+        
+        self.estimator = estimator
+        self.tol = tol
+        self.max_iter = max_iter
+        self.scoring = scoring
+        self.minimize = minimize
+        self.test_size=test_size
+        self.init = init
+        self.random_state = random_state
+        self.n_jobs = n_jobs
+        self.cache=cache
+        self.verbose = verbose
 
 
-class EvoSCOAL(BaseSCOAL):
+    def _split_row_clusters(self,data,fit_mask,test_mask,coclusters,models):
+        row_clusters, col_clusters = coclusters
+        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
+        results = self._compute_parallel(data,test_mask,coclusters,models,self._score_rows)
+        scores = np.zeros((row_clusters.size,n_row_clusters))
+        for i in range(n_row_clusters):
+            for j in range(n_col_clusters):
+                scores[:,i] += results[i*n_col_clusters+j] 
+        scores = scores/n_col_clusters
+        cluster_to_split = scores.mean(axis=0).argmax() if self.minimize else scores.mean(axis=0).argmin()
+        rows = np.where(row_clusters==cluster_to_split)[0]
+        rows_scores = scores[row_clusters==cluster_to_split,cluster_to_split]
+        rows = rows[rows_scores>=np.median(rows_scores)] if self.minimize else rows[rows_scores<np.median(rows_scores)]
+        new_row_clusters = np.copy(row_clusters)
+        new_row_clusters[rows] = n_row_clusters
+
+        return new_row_clusters
+    
+    def _split_col_clusters(self,data,fit_mask,test_mask,coclusters,models):
+        row_clusters, col_clusters = coclusters
+        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
+        results = self._compute_parallel(data,test_mask,coclusters,models,self._score_cols)
+        scores = np.zeros((col_clusters.size,n_col_clusters))
+        for i in range(n_row_clusters):
+            for j in range(n_col_clusters):
+                scores[:,j] += results[i*n_col_clusters+j] 
+        scores = scores/n_row_clusters
+        cluster_to_split = scores.mean(axis=0).argmax() if self.minimize else scores.mean(axis=0).argmin()
+        cols = np.where(col_clusters==cluster_to_split)
+        cols_scores = scores[col_clusters==cluster_to_split,cluster_to_split]
+        cols = cols[cols_scores>=np.median(cols_scores)] if self.minimize else cols[cols_scores<np.median(cols_scores)]
+        new_col_clusters = np.copy(col_clusters)
+        new_col_clusters[cols] = n_col_clusters
+
+        return new_col_clusters
+
+    def _print_status(self,iter_count,score,delta_score,n_row_clusters,n_col_clusters,elapsed_time):
+        if iter_count==0:
+            print('|'.join(x.ljust(15) for x in [
+                    'iteration',' score','delta score','n row clusters', 'n col clusters', 'elapsed time (s)']))
+
+        print('|'.join(x.ljust(15) for x in ['%i' % iter_count,'%.3f' % score,'%.3f' % delta_score,'%i' % n_row_clusters,'%i'  % n_col_clusters,'%i' % elapsed_time]))
+
+    def fit(self,matrix,row_features,col_features,fit_mask=None):
+        np.random.seed(self.random_state) 
+        data = matrix, row_features, col_features
+        if fit_mask is None:
+            fit_mask = np.invert(np.isnan(matrix)) 
+        test = np.random.choice(np.arange(fit_mask.sum()), int(fit_mask.sum()*self.test_size),replace=False)
+        rows,cols = np.where(fit_mask)
+        test_mask = np.zeros(fit_mask.shape).astype(bool)
+        test_mask[rows[test],cols[test]] = True
+        fit_mask[rows[test],cols[test]] = False
+        self.test_mask=test_mask
+        self.fit_mask=fit_mask
+
+        if self.cache:
+            self.memory = Memory('./pyscoal-cache')
+            self.method = self.memory.cache(self._cached_fit, ignore=['self','model','X','y','rows','cols'])
+
+        iter_count=0 
+        elapsed_time = 0
+        score = np.nan
+        delta_score=np.nan
+        converged = False
+        start = time.time()
+
+        self.n_row_clusters,self.n_col_clusters = 1, 1
+        self.coclusters = self._initialize_coclusters(fit_mask,self.n_row_clusters,self.n_col_clusters,how=self.init)
+        self.models = self._initialize_models(fit_mask,self.coclusters)
+        self.coclusters,self.models = self._converge_scoal(data,fit_mask,self.coclusters,self.models,False)
+        score = np.mean(np.array(self._score_coclusters(data,test_mask,self.coclusters,self.models)))
+        if self.verbose:
+                self._print_status(iter_count,score,delta_score,self.n_row_clusters,self.n_col_clusters,elapsed_time)
+
+        while not converged:
+
+            row_clusters_changed = False
+            col_clusters_changed = False
+
+            coclusters, models = np.copy(self.coclusters),np.copy(self.models)
+            rows_score = np.mean(np.array(self._score_coclusters(data,test_mask,coclusters,models)))
+            new_row_clusters = self._split_row_clusters(data,fit_mask,test_mask,coclusters,models)
+            coclusters = (new_row_clusters,coclusters[1])
+            models = self._initialize_models(fit_mask,coclusters)
+            coclusters,models = self._converge_scoal(data,fit_mask,coclusters,models,False)
+            rows_delta_score = rows_score
+            rows_score = np.mean(np.array(self._score_coclusters(data,test_mask,coclusters,models)))
+            rows_delta_score -= rows_score
+            if rows_delta_score>0:
+                self.n_row_clusters+=1
+                self.coclusters =  np.copy(coclusters)
+                self.models = np.copy(models)
+                row_clusters_changed = True
+            
+            coclusters, models = np.copy(self.coclusters),np.copy(self.models)
+            cols_score = np.mean(np.array(self._score_coclusters(data,test_mask,coclusters,models)))
+            new_col_clusters = self._split_row_clusters(data,fit_mask,test_mask,coclusters,models)
+            coclusters = (coclusters[0],new_col_clusters)
+            models = self._initialize_models(fit_mask,coclusters)
+            coclusters,models = self._converge_scoal(data,fit_mask,coclusters,models,False)
+            cols_delta_score = cols_score
+            cols_score = np.mean(np.array(self._score_coclusters(data,test_mask,coclusters,models)))
+            cols_delta_score -= cols_score
+            if cols_delta_score>0:
+                self.n_col_clusters+=1
+                self.coclusters  = np.copy(coclusters)
+                self.models = np.copy(models)
+                col_clusters_changed = True
+
+            delta_score = score
+            score = np.mean(np.array(self._score_coclusters(data,test_mask,self.coclusters,self.models)))
+            delta_score -= score
+            converged = not row_clusters_changed and not col_clusters_changed
+            iter_count+=1
+            elapsed_time = time.time() - start
+            if self.verbose:
+                self._print_status(iter_count,score,delta_score,self.n_row_clusters,self.n_col_clusters,elapsed_time)
+        
+        fit_mask = np.logical_or(fit_mask,test_mask)
+        self.coclusters,self.models = self._converge_scoal(data,fit_mask,self.coclusters,self.models,False)
+        self.elapsed_time = time.time() - start
+        self.n_iter = iter_count
+        if self.cache:
+            self.memory.clear(warn=False)
+
+
+class EvoSCOAL(SCOAL):
     
     def __init__(self,
                 max_row_clusters=10,
                 max_col_clusters=10,
                 pop_size=10,
+                max_gen=100,
                 estimator=LinearRegression(),
                 scoring=mean_squared_error,
                 minimize=True,
                 test_size=0.2,
-                max_iter=np.nan,
                 n_scoal_iters=1,
                 tol = 1e-4,
                 init='random',
@@ -421,11 +570,11 @@ class EvoSCOAL(BaseSCOAL):
         self.max_row_clusters=max_row_clusters
         self.max_col_clusters=max_col_clusters
         self.pop_size = pop_size
+        self.max_gen = max_gen
         self.estimator=estimator
         self.scoring=mean_squared_error
         self.minimize=minimize
         self.test_size=test_size
-        self.max_iter = max_iter
         self.n_scoal_iters = n_scoal_iters
         self.tol=tol
         self.init=init
@@ -619,7 +768,7 @@ class EvoSCOAL(BaseSCOAL):
     def _init_population(self,fit_mask):
         n_row_clusters = np.random.randint(1,self.max_row_clusters+1,self.pop_size)
         n_col_clusters = np.random.randint(1,self.max_col_clusters+1,self.pop_size)
-        pop = [(self._initialize_coclusters(fit_mask,i,j)) for i,j in zip(n_row_clusters,n_col_clusters)]
+        pop = [(self._initialize_coclusters(fit_mask,i,j,self.init)) for i,j in zip(n_row_clusters,n_col_clusters)]
 
         return pop
 
@@ -674,7 +823,7 @@ class EvoSCOAL(BaseSCOAL):
         self.fitness=fitness
         score = np.nanmean(fitness,axis=(1,2)).min() if self.minimize else np.nanmean(fitness,axis=(1,2)).max()
         converged = (
-                iter_count == self.max_iter or 
+                iter_count == self.max_gen or 
                 (delta_score > 0 and delta_score < self.tol)
             )
         if self.verbose:
@@ -694,7 +843,7 @@ class EvoSCOAL(BaseSCOAL):
             delta_score -= score
             iter_count+=1
             converged = (
-                iter_count == self.max_iter or 
+                iter_count == self.max_gen or 
                 (delta_score > 0 and delta_score < self.tol)
             )
             elapsed_time = time.time() - start
@@ -710,28 +859,6 @@ class EvoSCOAL(BaseSCOAL):
         if self.cache:
             self.memory.clear(warn=False)
 
-        
-    def predict(self,matrix,row_features,col_features,pred_mask=None):
-        data = (matrix,row_features,col_features)
-        if pred_mask is None:
-            pred_mask = np.isnan(matrix)
-        pred_matrix = matrix.copy()
-        results = self._predict_coclusters(data,pred_mask,self.coclusters,self.models)
-        for i in range(self.n_row_clusters):
-            for j in range(self.n_col_clusters):
-                cocluster_mask = self._get_bool_mask(self.coclusters,i,j)
-                pred_matrix[cocluster_mask&pred_mask] = results[i][j]
-
-        return pred_matrix
-
-    def score(self,matrix,row_features,col_features,pred_mask=None):
-        data = (matrix,row_features,col_features)
-        if pred_mask is None:
-            pred_mask = np.invert(np.isnan(matrix))
-        scores = self._score_coclusters(data,pred_mask,self.coclusters,self.models)
-        score = np.mean(np.array(scores))
-
-        return score
 
 
   
