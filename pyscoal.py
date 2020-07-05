@@ -309,7 +309,7 @@ class SCOAL():
             print('|'.join(x.ljust(15) for x in [
                     'iteration',' score','delta score','rows changed', 'columns changed', 'elapsed time (s)']))
 
-        print('|'.join(x.ljust(15) for x in ['%i' % iter_count,'%.3f' % score,'%.3f' % delta_score,'%i' % rows_changed,'%i'  % cols_changed,'%i' % elapsed_time]))
+        print('|'.join(x.ljust(15) for x in ['%i' % iter_count,'%.4f' % score,'%.4f' % delta_score,'%i' % rows_changed,'%i'  % cols_changed,'%i' % elapsed_time]))
 
     def _converge_scoal(self,data,fit_mask,coclusters,models,verbose):
         iter_count=0 
@@ -462,7 +462,7 @@ class MSCOAL(SCOAL):
             print('|'.join(x.ljust(15) for x in [
                     'iteration',' score','delta score','n row clusters', 'n col clusters', 'elapsed time (s)']))
 
-        print('|'.join(x.ljust(15) for x in ['%i' % iter_count,'%.3f' % score,'%.3f' % delta_score,'%i' % n_row_clusters,'%i'  % n_col_clusters,'%i' % elapsed_time]))
+        print('|'.join(x.ljust(15) for x in ['%i' % iter_count,'%.4f' % score,'%.4f' % delta_score,'%i' % n_row_clusters,'%i'  % n_col_clusters,'%i' % elapsed_time]))
 
     def fit(self,matrix,row_features,col_features,fit_mask=None):
         np.random.seed(self.random_state) 
@@ -586,16 +586,14 @@ class EvoSCOAL(SCOAL):
     def _local_search(self,data,fit_mask,pop):
         new_pop = []
         for ind in pop:
-            iter_count = 0
-            while iter_count < self.n_scoal_iters: 
-                iter_count+=1
-                if not np.all(self._check_coclusters(fit_mask,ind)):
-                    continue
-                models = self._initialize_models(fit_mask,ind)
-                models,_ = self._update_models(data,fit_mask,ind,models)
-                new_row_clusters,new_col_clusters = self._update_coclusters(data,fit_mask,ind,models)
-                ind = (new_row_clusters,new_col_clusters)
-            new_pop.append((new_row_clusters,new_col_clusters))
+            if np.all(self._check_coclusters(fit_mask,ind)):
+                iter_count = 0
+                while iter_count < self.n_scoal_iters: 
+                    iter_count+=1
+                    models = self._initialize_models(fit_mask,ind)
+                    models,_ = self._update_models(data,fit_mask,ind,models)
+                    ind = self._update_coclusters(data,fit_mask,ind,models)
+            new_pop.append(ind)
 
         return new_pop  
         
@@ -707,36 +705,35 @@ class EvoSCOAL(SCOAL):
     def _mutation(self,mask,pop,fitness):
         new_pop = []
         for i, ind in enumerate(pop):
-            if not np.all(self._check_coclusters(mask,ind)):
-                continue
-            new_ind = deepcopy(ind)
-            new_row_clusters,new_col_clusters = new_ind
-            n_row_clusters, n_col_clusters = np.unique(new_row_clusters).size, np.unique(new_col_clusters).size
-            all_fitness = np.concatenate((np.nanmean(fitness[i],axis=1),np.nanmean(fitness[i],axis=0)),axis=0)
-            probs = np.divide(1,all_fitness, where=all_fitness!=0) if not self.minimize else all_fitness
-            probs[probs==0] = 1
-            probs = np.nan_to_num(probs)
-            probs = probs/probs.sum()
-            choice = np.random.choice(np.arange(probs.size),p=probs)
-            if choice < self.max_row_clusters:
-                row_cluster=choice
-                if abs(n_row_clusters - self.max_row_clusters) < abs(n_row_clusters - 1):
-                    new_row_clusters=self._delete_row_cluster(mask,new_ind,row_cluster)
-                else:
-                    new_row_clusters=self._split_row_cluster(mask,new_ind,row_cluster)
+            if np.all(self._check_coclusters(mask,ind)):
+                row_clusters,col_clusters = ind
+                n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
+                all_fitness = np.concatenate((np.nanmean(fitness[i],axis=1),np.nanmean(fitness[i],axis=0)),axis=0)
+                probs = np.divide(1,all_fitness, where=all_fitness!=0) if not self.minimize else all_fitness
+                probs[probs==0] = 1
+                probs = np.nan_to_num(probs)
+                probs = probs/probs.sum()
+                choice = np.random.choice(np.arange(probs.size),p=probs)
+                if choice < self.max_row_clusters:
+                    row_cluster=choice
+                    if abs(n_row_clusters - self.max_row_clusters) < abs(n_row_clusters - 1):
+                        row_clusters=self._delete_row_cluster(mask,ind,row_cluster)
+                    else:
+                        row_clusters=self._split_row_cluster(mask,ind,row_cluster)
 
-            else:
-                col_cluster=choice-self.max_row_clusters
-                if abs(n_col_clusters - self.max_row_clusters) < abs(n_col_clusters - 1):
-                    new_col_clusters=self._delete_col_cluster(mask,new_ind,col_cluster)
                 else:
-                    new_col_clusters=self._split_col_cluster(mask,new_ind,col_cluster)
-            new_pop.append((new_row_clusters,new_col_clusters))
+                    col_cluster=choice-self.max_row_clusters
+                    if abs(n_col_clusters - self.max_row_clusters) < abs(n_col_clusters - 1):
+                        col_clusters=self._delete_col_cluster(mask,ind,col_cluster)
+                    else:
+                        col_clusters=self._split_col_cluster(mask,ind,col_cluster)
+                ind = row_clusters,col_clusters
+            new_pop.append(ind)
 
         return new_pop
    
-    def _replacement(self,pop,fitness,new_pop,new_fitness):
-        all_fitness = np.nanmean(np.concatenate((fitness,new_fitness),axis=0),axis=(1,2))
+    def _replacement(self,pop1,fitness1,pop2,fitness2):
+        all_fitness = np.nanmean(np.concatenate((fitness1,fitness2),axis=0),axis=(1,2))
         best = np.nanargmin(all_fitness) if self.minimize else np.nanargmax(all_fitness)
         probs = np.divide(1,all_fitness, where=all_fitness!=0) if self.minimize else all_fitness
         probs[probs==0] = 1
@@ -744,25 +741,24 @@ class EvoSCOAL(SCOAL):
         probs[best] = 0.
         probs = probs/probs.sum()
         choice = np.random.choice(np.arange(probs.size),self.pop_size-1,replace=False,p=probs)
-        pop = pop + new_pop
+        pop = pop1 + pop2
         new_pop = [pop[i] for i in choice]
         new_pop.append(pop[best])
-        fitness = np.concatenate((fitness,new_fitness),axis=0)
-        new_fitness = fitness[[best]+choice.tolist(),:,:]
+        fitness = np.concatenate((fitness1,fitness2),axis=0)
+        new_fitness = fitness[choice.tolist()+[best],:,:]
 
         return new_pop, new_fitness
             
     def _evaluate_fitness(self,data,fit_mask,test_mask,pop):
         fitness = np.zeros((self.pop_size,self.max_row_clusters,self.max_col_clusters))*np.nan
         for i,ind in enumerate(pop):
-            if not np.all(self._check_coclusters(fit_mask,ind)):
-                continue
-            row_clusters,col_clusters = ind
-            n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
-            models = self._initialize_models(fit_mask,ind)
-            models, _ = self._update_models(data,fit_mask,ind,models)
-            scores = self._score_coclusters(data,test_mask,ind,models)
-            fitness[i,:n_row_clusters,:n_col_clusters] = scores
+            if  np.all(self._check_coclusters(fit_mask,ind)):
+                row_clusters,col_clusters = ind
+                n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
+                models = self._initialize_models(fit_mask,ind)
+                models, _ = self._update_models(data,fit_mask,ind,models)
+                scores = self._score_coclusters(data,test_mask,ind,models)
+                fitness[i,:n_row_clusters,:n_col_clusters] = scores
         return fitness
        
     def _init_population(self,fit_mask):
@@ -779,7 +775,7 @@ class EvoSCOAL(SCOAL):
 
         return valid
 
-    def _print_status(self,iter_count,pop,fitness,delta_score,elapsed_time):
+    def _print_status(self,iter_count,pop,fitness,delta_score,infeasible,elapsed_time):
         scores = np.nanmean(fitness,axis=(1,2))
         best_score = scores.min() if self.minimize else scores.max()
         worst_score = scores.max() if self.minimize else scores.min()
@@ -790,9 +786,9 @@ class EvoSCOAL(SCOAL):
         mean_size = sizes.mean()
         if iter_count==0:
             print('|'.join(x.ljust(11) for x in [
-                    'iteration','delta score','best score','worst score', 'mean score','max size','min size','mean size', 'elapsed time (s)']))
+                    'iteration','delta score','best score','worst score','mean score','max size','min size','mean size', 'infeasible','elapsed time (s)']))
 
-        print('|'.join(x.ljust(11) for x in ['%i' % iter_count,'%.3f' % delta_score,'%.3f' % best_score,'%.3f' % worst_score,'%.3f'  % mean_score,'%i'  % max_size,'%i'  % min_size,'%i'  % mean_size, '%i' % elapsed_time]))
+        print('|'.join(x.ljust(11) for x in ['%i' % iter_count,'%.4f' % delta_score,'%.4f' % best_score,'%.4f' % worst_score,'%.4f'  % mean_score,'%i'  % max_size,'%i'  % min_size,'%.2f'  % mean_size, '%i' % infeasible,'%i' % elapsed_time]))
 
     def fit(self,matrix,row_features,col_features,fit_mask=None):
         np.random.seed(self.random_state) 
@@ -818,26 +814,37 @@ class EvoSCOAL(SCOAL):
         start = time.time()
 
         pop = self._init_population(fit_mask)
+        infeasible = np.sum(np.invert(self._check_population(fit_mask,pop)))
         fitness = self._evaluate_fitness(data,fit_mask,test_mask,pop)
-        self.pop = pop
-        self.fitness=fitness
         score = np.nanmean(fitness,axis=(1,2)).min() if self.minimize else np.nanmean(fitness,axis=(1,2)).max()
         converged = (
                 iter_count == self.max_gen or 
                 (delta_score > 0 and delta_score < self.tol)
             )
         if self.verbose:
-            self._print_status(iter_count,pop,fitness,delta_score,elapsed_time)
+            self._print_status(iter_count,pop,fitness,delta_score,elapsed_time,infeasible)
         
         while not converged:
+            scoal_pop = deepcopy(pop)
+            scoal_pop = self._local_search(data,fit_mask,scoal_pop)
+            scoal_fitness = self._evaluate_fitness(data,fit_mask,test_mask,scoal_pop)
+            #to do: fazer uma função para isso 
+            #keep_list = np.nan_to_num(np.nanmean(scoal_fitness,axis=(1,2)))<=np.nan_to_num(np.nanmean(fitness,axis=(1,2)))
+            #scoal_pop = [new if keep else old for (new,old,keep) in zip(scoal_pop,pop,keep_list)]
+            #print(keep_list)
+            #print(np.nanmean(scoal_fitness,axis=(1,2)))
+            #scoal_fitness = np.array([new if keep else old for (new,old,keep) in zip(scoal_fitness,fitness,keep_list)])
+            #print(np.nanmean(scoal_fitness,axis=(1,2)))
 
-            pop = self._local_search(data,fit_mask,pop)
-            fitness = self._evaluate_fitness(data,fit_mask,test_mask,pop)
-            new_pop = self._mutation(fit_mask,pop,fitness)
-            new_fitness = self._evaluate_fitness(data,fit_mask,test_mask,new_pop)
-            pop,fitness = self._replacement(pop,fitness,new_pop,new_fitness)
-            self.pop = pop
-            self.fitness=fitness
+            
+            mut_pop = deepcopy(scoal_pop)
+            mut_pop = self._mutation(fit_mask,mut_pop,scoal_fitness)
+            mut_fitness = self._evaluate_fitness(data,fit_mask,test_mask,mut_pop)
+
+            infeasible = np.invert(self._check_population(fit_mask,scoal_pop)).sum() + np.invert(self._check_population(fit_mask,mut_pop)).sum()
+            
+            pop,fitness = self._replacement(scoal_pop,scoal_fitness,mut_pop,mut_fitness)
+            
             delta_score = score
             score = np.nanmean(fitness,axis=(1,2)).min() if self.minimize else np.nanmean(fitness,axis=(1,2)).max()
             delta_score -= score
@@ -848,7 +855,10 @@ class EvoSCOAL(SCOAL):
             )
             elapsed_time = time.time() - start
             if self.verbose:
-                self._print_status(iter_count,pop,fitness,delta_score,elapsed_time)
+                self._print_status(iter_count,pop,fitness,delta_score,infeasible,elapsed_time)
+
+        self.pop = pop
+        self.fitness=fitness
         self.elapsed_time = elapsed_time
         self.n_iter = iter_count
         fit_mask = np.logical_or(fit_mask,test_mask)
