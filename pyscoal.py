@@ -819,6 +819,11 @@ class EvoSCOAL(SCOAL):
             scoal_pop = deepcopy(pop)
             scoal_pop = self._local_search(data,fit_mask,scoal_pop)
             scoal_fitness = self._evaluate_fitness(data,fit_mask,test_mask,scoal_pop)
+            #to do: fazer uma função para isso 
+            keep_list = np.nan_to_num(np.nanmean(scoal_fitness,axis=(1,2)))<=np.nan_to_num(np.nanmean(fitness,axis=(1,2)))
+            scoal_pop = [new if keep else old for (new,old,keep) in zip(scoal_pop,pop,keep_list)]
+            scoal_fitness = np.array([new if keep else old for (new,old,keep) in zip(scoal_fitness,fitness,keep_list)])
+
             
             mut_pop = deepcopy(scoal_pop)
             mut_pop = self._mutation(fit_mask,mut_pop,scoal_fitness)
