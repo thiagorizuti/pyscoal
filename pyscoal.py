@@ -847,13 +847,13 @@ class EvoSCOAL(SCOAL):
 
         self.pop = pop
         self.fitness=fitness
-        self.elapsed_time = elapsed_time
         self.n_iter = iter_count
         fit_mask = np.logical_or(fit_mask,test_mask)
         self.coclusters = self.pop[np.nanmean(fitness,axis=(1,2)).argmin() if self.minimize else np.nanmean(fitness,axis=(1,2)).argmax()]
         self.n_row_clusters, self.n_col_clusters  = np.unique(self.coclusters[0]).size, np.unique(self.coclusters[1]).size
         self.models = self._initialize_models(fit_mask,self.coclusters)
-        self.models,_ = self._update_models(data,fit_mask,self.coclusters,self.models)
+        self.coclusters,self.models = self._converge_scoal(data,fit_mask,self.coclusters,self.models,False)
+        self.elapsed_time = time.time() - start
         if self.cache:
             self.memory.clear(warn=False)
 
