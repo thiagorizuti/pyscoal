@@ -1,10 +1,10 @@
 import numpy as np
 import time
-from sklearn.base import clone
+from sklearn.base import clone, is_classifier
 from copy import deepcopy
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
-from joblib import Parallel, delayed, Memory
+from joblib import Parallel, delayed, Memory, dump
 from sklearn.utils.validation import check_is_fitted
 
 class SCOAL():
@@ -15,8 +15,6 @@ class SCOAL():
                 n_col_clusters = 2,
                 tol = 1e-4, 
                 max_iter = 100,
-                scoring=mean_squared_error,
-                minimize = True,
                 init='random',
                 random_state=42,
                 n_jobs=1,
@@ -28,14 +26,20 @@ class SCOAL():
         self.n_col_clusters = n_col_clusters
         self.tol = tol
         self.max_iter = max_iter
-        self.scoring = scoring
-        self.minimize = minimize
         self.init = init
         self.random_state = random_state
         self.n_jobs = n_jobs
         self.cache=cache
         self.verbose = verbose
-        
+
+        self.is_classifier = is_classifier(estimator)
+
+           
+    def _scoring(self,y_true,y_pred):
+        if self.is_classifier:
+            pass #to do
+        else:
+            return np.sum((y_true-y_pred)**2)
 
     def _random_init(self,mask,n_row_clusters,n_col_clusters):
         n_rows, n_cols = mask.shape
@@ -178,7 +182,7 @@ class SCOAL():
             else:
                 model.fit(X,y)
             y_pred = model.predict(X)
-            score = self.scoring(y,y_pred)
+            score = self._scoring(y,y_pred)
 
         return model, score  
     
@@ -197,7 +201,7 @@ class SCOAL():
         score = 0
         if y.size > 0:
             y_pred = model.predict(X)
-            score = self.scoring(y,y_pred)
+            score = self._scoring(y,y_pred)
 
         return score 
     
@@ -209,7 +213,7 @@ class SCOAL():
             X, y = self._get_X_y(data,mask,[row],cols)
             if y.size > 0:
                 y_pred = model.predict(X)
-                scores[row] = self.scoring(y,y_pred)
+                scores[row] = self._scoring(y,y_pred)
 
         return scores
     
@@ -221,7 +225,7 @@ class SCOAL():
             X, y = self._get_X_y(data,mask,rows,[col])
             if y.size > 0:
                 y_pred = model.predict(X)
-                scores[col] = self.scoring(y,y_pred)
+                scores[col] = self._scoring(y,y_pred)
 
         return scores
         
@@ -253,8 +257,7 @@ class SCOAL():
         for i in range(n_row_clusters):
             for j in range(n_col_clusters):
                 scores[:,i] += results[i*n_col_clusters+j] 
-        scores = scores/n_col_clusters
-        new_row_clusters  = np.argmin(scores,axis=1) if self.minimize else np.argmax(scores,axis=1)
+        new_row_clusters  = np.argmin(scores,axis=1)
 
         return new_row_clusters
     
@@ -266,8 +269,7 @@ class SCOAL():
         for i in range(n_row_clusters):
             for j in range(n_col_clusters):
                 scores[:,j] += results[i*n_col_clusters+j] 
-        scores = scores/n_row_clusters
-        new_col_clusters  = np.argmin(scores,axis=1) if self.minimize else np.argmax(scores,axis=1)
+        new_col_clusters  = np.argmin(scores,axis=1)
 
         return new_col_clusters
 
@@ -322,7 +324,7 @@ class SCOAL():
         start = time.time()
 
         models, scores = self._update_models(data,fit_mask,coclusters,models)
-        score = np.mean(scores)
+        score = np.sum(scores)/np.sum(fit_mask)
 
         converged = iter_count == self.max_iter 
         if verbose:
@@ -335,7 +337,7 @@ class SCOAL():
             coclusters = (new_row_clusters, new_col_clusters)
             delta_score = score
             models, scores = self._update_models(data,fit_mask,coclusters,models)
-            score = np.mean(scores)            
+            score = np.sum(scores)/np.sum(fit_mask)            
             delta_score -= score
             iter_count += 1
             converged = (
@@ -346,6 +348,7 @@ class SCOAL():
             elapsed_time = time.time() - start
             if verbose:
                 self._print_status(iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time)
+        
         self.elapsed_time = elapsed_time
         self.n_iter = iter_count
 
@@ -389,7 +392,7 @@ class SCOAL():
         if pred_mask is None:
             pred_mask = np.invert(np.isnan(matrix))
         scores = self._score_coclusters(data,pred_mask,self.coclusters,self.models)
-        score = np.mean(np.array(scores))
+        score = np.sum(scores)/np.sum(pred_mask)  
 
         return score
 
@@ -399,7 +402,6 @@ class MSCOAL(SCOAL):
                 estimator=LinearRegression(), 
                 tol = 1e-4, 
                 max_iter = 100,
-                scoring=mean_squared_error,
                 minimize = True,
                 test_size=0.2,
                 init='random',
@@ -411,14 +413,15 @@ class MSCOAL(SCOAL):
         self.estimator = estimator
         self.tol = tol
         self.max_iter = max_iter
-        self.scoring = scoring
-        self.minimize = minimize
         self.test_size=test_size
         self.init = init
         self.random_state = random_state
         self.n_jobs = n_jobs
         self.cache=cache
         self.verbose = verbose
+
+        self.is_classifier = is_classifier(estimator)
+
 
 
     def _split_row_clusters(self,data,fit_mask,test_mask,coclusters,models):
@@ -429,11 +432,10 @@ class MSCOAL(SCOAL):
         for i in range(n_row_clusters):
             for j in range(n_col_clusters):
                 scores[:,i] += results[i*n_col_clusters+j] 
-        scores = scores/n_col_clusters
-        cluster_to_split = scores.mean(axis=0).argmax() if self.minimize else scores.mean(axis=0).argmin()
+        cluster_to_split = scores.mean(axis=0).argmax()
         rows = np.where(row_clusters==cluster_to_split)[0]
         rows_scores = scores[row_clusters==cluster_to_split,cluster_to_split]
-        rows = rows[rows_scores>=np.median(rows_scores)] if self.minimize else rows[rows_scores<np.median(rows_scores)]
+        rows = rows[rows_scores>=np.median(rows_scores)]
         new_row_clusters = np.copy(row_clusters)
         new_row_clusters[rows] = n_row_clusters
 
@@ -447,11 +449,10 @@ class MSCOAL(SCOAL):
         for i in range(n_row_clusters):
             for j in range(n_col_clusters):
                 scores[:,j] += results[i*n_col_clusters+j] 
-        scores = scores/n_row_clusters
-        cluster_to_split = scores.mean(axis=0).argmax() if self.minimize else scores.mean(axis=0).argmin()
+        cluster_to_split = scores.mean(axis=0).argmax()
         cols = np.where(col_clusters==cluster_to_split)
         cols_scores = scores[col_clusters==cluster_to_split,cluster_to_split]
-        cols = cols[cols_scores>=np.median(cols_scores)] if self.minimize else cols[cols_scores<np.median(cols_scores)]
+        cols = cols[cols_scores>=np.median(cols_scores)]
         new_col_clusters = np.copy(col_clusters)
         new_col_clusters[cols] = n_col_clusters
 
@@ -492,7 +493,7 @@ class MSCOAL(SCOAL):
         self.coclusters = self._initialize_coclusters(fit_mask,self.n_row_clusters,self.n_col_clusters,how=self.init)
         self.models = self._initialize_models(fit_mask,self.coclusters)
         self.coclusters,self.models = self._converge_scoal(data,fit_mask,self.coclusters,self.models,False)
-        score = np.mean(np.array(self._score_coclusters(data,test_mask,self.coclusters,self.models)))
+        score = np.sum(self._score_coclusters(data,test_mask,self.coclusters,self.models))/np.sum(test_mask)
         if self.verbose:
                 self._print_status(iter_count,score,delta_score,self.n_row_clusters,self.n_col_clusters,elapsed_time)
 
@@ -502,13 +503,13 @@ class MSCOAL(SCOAL):
             col_clusters_changed = False
 
             coclusters, models = np.copy(self.coclusters),np.copy(self.models)
-            rows_score = np.mean(np.array(self._score_coclusters(data,test_mask,coclusters,models)))
+            rows_score = np.sum(self._score_coclusters(data,test_mask,coclusters,models))/np.sum(test_mask)
             new_row_clusters = self._split_row_clusters(data,fit_mask,test_mask,coclusters,models)
             coclusters = (new_row_clusters,coclusters[1])
             models = self._initialize_models(fit_mask,coclusters)
             coclusters,models = self._converge_scoal(data,fit_mask,coclusters,models,False)
             rows_delta_score = rows_score
-            rows_score = np.mean(np.array(self._score_coclusters(data,test_mask,coclusters,models)))
+            rows_score = np.sum(self._score_coclusters(data,test_mask,coclusters,models))/np.sum(test_mask)
             rows_delta_score -= rows_score
             if rows_delta_score>0:
                 self.n_row_clusters+=1
@@ -517,13 +518,13 @@ class MSCOAL(SCOAL):
                 row_clusters_changed = True
             
             coclusters, models = np.copy(self.coclusters),np.copy(self.models)
-            cols_score = np.mean(np.array(self._score_coclusters(data,test_mask,coclusters,models)))
+            cols_score = np.sum(self._score_coclusters(data,test_mask,coclusters,models))/np.sum(test_mask)
             new_col_clusters = self._split_row_clusters(data,fit_mask,test_mask,coclusters,models)
             coclusters = (coclusters[0],new_col_clusters)
             models = self._initialize_models(fit_mask,coclusters)
             coclusters,models = self._converge_scoal(data,fit_mask,coclusters,models,False)
             cols_delta_score = cols_score
-            cols_score = np.mean(np.array(self._score_coclusters(data,test_mask,coclusters,models)))
+            cols_score = np.sum(self._score_coclusters(data,test_mask,coclusters,models))/np.sum(test_mask)
             cols_delta_score -= cols_score
             if cols_delta_score>0:
                 self.n_col_clusters+=1
@@ -532,7 +533,7 @@ class MSCOAL(SCOAL):
                 col_clusters_changed = True
 
             delta_score = score
-            score = np.mean(np.array(self._score_coclusters(data,test_mask,self.coclusters,self.models)))
+            score =  np.sum(self._score_coclusters(data,test_mask,coclusters,models))/np.sum(test_mask)
             delta_score -= score
             converged = not row_clusters_changed and not col_clusters_changed
             iter_count+=1
@@ -555,13 +556,12 @@ class EvoSCOAL(SCOAL):
                 max_col_clusters=10,
                 pop_size=10,
                 max_gen=100,
+                max_iter=100,
                 estimator=LinearRegression(),
-                scoring=mean_squared_error,
-                minimize=True,
                 test_size=0.2,
                 n_scoal_iters=1,
                 tol = 1e-4,
-                init='random',
+                init='smart',
                 random_state=42,
                 n_jobs=1,
                 cache=False,
@@ -571,9 +571,8 @@ class EvoSCOAL(SCOAL):
         self.max_col_clusters=max_col_clusters
         self.pop_size = pop_size
         self.max_gen = max_gen
+        self.max_iter = max_iter
         self.estimator=estimator
-        self.scoring=mean_squared_error
-        self.minimize=minimize
         self.test_size=test_size
         self.n_scoal_iters = n_scoal_iters
         self.tol=tol
@@ -582,6 +581,9 @@ class EvoSCOAL(SCOAL):
         self.n_jobs=n_jobs
         self.cache=cache
         self.verbose=verbose
+
+        self.is_classifier = is_classifier(estimator)
+
 
     def _local_search(self,data,fit_mask,pop):
         new_pop = []
@@ -696,13 +698,11 @@ class EvoSCOAL(SCOAL):
     def _mutation(self,mask,pop,fitness):
         new_pop = []
         for i, ind in enumerate(pop):
-            if np.all(self._check_coclusters(mask,ind)):
+            if np.nansum(fitness[i],axis=(0,1)) > 0:
                 row_clusters,col_clusters = ind
                 n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
-                all_fitness = np.concatenate((np.nanmean(fitness[i],axis=1),np.nanmean(fitness[i],axis=0)),axis=0)
-                probs = np.divide(1,all_fitness, where=all_fitness!=0) if not self.minimize else all_fitness
-                probs[probs==0] = 1
-                probs = np.nan_to_num(probs)
+                probs = np.concatenate((np.nansum(fitness[i],axis=1),np.nansum(fitness[i],axis=0)),axis=0)
+                np.divide(1,probs, where=probs!=0,out=probs)
                 probs = probs/probs.sum()
                 choice = np.random.choice(np.arange(probs.size),p=probs)
                 if choice < self.max_row_clusters:
@@ -724,11 +724,11 @@ class EvoSCOAL(SCOAL):
         return new_pop
    
     def _replacement(self,pop1,fitness1,pop2,fitness2):
-        all_fitness = np.nanmean(np.concatenate((fitness1,fitness2),axis=0),axis=(1,2))
-        best = np.nanargmin(all_fitness) if self.minimize else np.nanargmax(all_fitness)
-        probs = np.divide(1,all_fitness, where=all_fitness!=0) if self.minimize else all_fitness
-        probs[probs==0] = 1
+        probs = np.nansum(np.concatenate((fitness1,fitness2),axis=0),axis=(1,2))
+        probs[probs==0] = np.nan
+        best = np.nanargmin(probs)
         probs = np.nan_to_num(probs)
+        np.divide(1,probs, where=probs!=0,out=probs)
         probs[best] = 0.
         probs = probs/probs.sum()
         choice = np.random.choice(np.arange(probs.size),self.pop_size-1,replace=False,p=probs)
@@ -766,10 +766,10 @@ class EvoSCOAL(SCOAL):
 
         return valid
 
-    def _print_status(self,iter_count,pop,fitness,delta_score,infeasible,elapsed_time):
-        scores = np.nanmean(fitness,axis=(1,2))
-        best_score = scores.min() if self.minimize else scores.max()
-        worst_score = scores.max() if self.minimize else scores.min()
+    def _print_status(self,iter_count,pop,fitness,delta_score,infeasible,elapsed_time,test_mask):
+        scores = np.nansum(fitness,axis=(1,2))/np.sum(test_mask)
+        best_score = scores.min() 
+        worst_score = scores.max()
         mean_score = scores.mean()
         sizes = np.array([(np.max(ind[0])+1)*(np.max(ind[1])+1) for ind in pop])
         max_size = sizes.max()
@@ -805,22 +805,23 @@ class EvoSCOAL(SCOAL):
         start = time.time()
 
         pop = self._init_population(fit_mask)
-        infeasible = np.sum(np.invert(self._check_population(fit_mask,pop)))
+        #infeasible = np.sum(np.invert(self._check_population(fit_mask,pop)))
         fitness = self._evaluate_fitness(data,fit_mask,test_mask,pop)
-        score = np.nanmean(fitness,axis=(1,2)).min() if self.minimize else np.nanmean(fitness,axis=(1,2)).max()
+        infeasible = np.sum(np.nansum(fitness,axis=(1,2))==0)
+        score = np.nansum(fitness,axis=(1,2)).min()/np.sum(test_mask)
         converged = (
                 iter_count == self.max_gen or 
                 (delta_score > 0 and delta_score < self.tol)
             )
         if self.verbose:
-            self._print_status(iter_count,pop,fitness,delta_score,elapsed_time,infeasible)
+            self._print_status(iter_count,pop,fitness,delta_score,elapsed_time,infeasible,test_mask)
         
         while not converged:
             scoal_pop = deepcopy(pop)
             scoal_pop = self._local_search(data,fit_mask,scoal_pop)
             scoal_fitness = self._evaluate_fitness(data,fit_mask,test_mask,scoal_pop)
             #to do: fazer uma função para isso 
-            keep_list = np.nan_to_num(np.nanmean(scoal_fitness,axis=(1,2)))<=np.nan_to_num(np.nanmean(fitness,axis=(1,2)))
+            keep_list = np.nan_to_num(np.nansum(scoal_fitness,axis=(1,2)))<=np.nan_to_num(np.nansum(fitness,axis=(1,2)))
             scoal_pop = [new if keep else old for (new,old,keep) in zip(scoal_pop,pop,keep_list)]
             scoal_fitness = np.array([new if keep else old for (new,old,keep) in zip(scoal_fitness,fitness,keep_list)])
 
@@ -829,12 +830,13 @@ class EvoSCOAL(SCOAL):
             mut_pop = self._mutation(fit_mask,mut_pop,scoal_fitness)
             mut_fitness = self._evaluate_fitness(data,fit_mask,test_mask,mut_pop)
 
-            infeasible = np.invert(self._check_population(fit_mask,scoal_pop)).sum() + np.invert(self._check_population(fit_mask,mut_pop)).sum()
-            
+            #infeasible = np.invert(self._check_population(fit_mask,scoal_pop)).sum() + np.invert(self._check_population(fit_mask,mut_pop)).sum()
+            infeasible = np.sum(np.nansum(scoal_fitness,axis=(1,2))==0) + np.sum(np.nansum(mut_fitness,axis=(1,2))==0)
+           
             pop,fitness = self._replacement(scoal_pop,scoal_fitness,mut_pop,mut_fitness)
             
             delta_score = score
-            score = np.nanmean(fitness,axis=(1,2)).min() if self.minimize else np.nanmean(fitness,axis=(1,2)).max()
+            score = np.nansum(fitness,axis=(1,2)).min()/np.sum(test_mask)
             delta_score -= score
             iter_count+=1
             converged = (
@@ -843,13 +845,13 @@ class EvoSCOAL(SCOAL):
             )
             elapsed_time = time.time() - start
             if self.verbose:
-                self._print_status(iter_count,pop,fitness,delta_score,infeasible,elapsed_time)
+                self._print_status(iter_count,pop,fitness,delta_score,infeasible,elapsed_time,test_mask)
 
         self.pop = pop
         self.fitness=fitness
         self.n_iter = iter_count
         fit_mask = np.logical_or(fit_mask,test_mask)
-        self.coclusters = self.pop[np.nanmean(fitness,axis=(1,2)).argmin() if self.minimize else np.nanmean(fitness,axis=(1,2)).argmax()]
+        self.coclusters = self.pop[np.nansum(fitness,axis=(1,2)).argmin()]
         self.n_row_clusters, self.n_col_clusters  = np.unique(self.coclusters[0]).size, np.unique(self.coclusters[1]).size
         self.models = self._initialize_models(fit_mask,self.coclusters)
         self.coclusters,self.models = self._converge_scoal(data,fit_mask,self.coclusters,self.models,False)
