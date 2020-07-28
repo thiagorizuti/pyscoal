@@ -450,7 +450,7 @@ class MSCOAL(SCOAL):
             for j in range(n_col_clusters):
                 scores[:,j] += results[i*n_col_clusters+j] 
         cluster_to_split = scores.mean(axis=0).argmax()
-        cols = np.where(col_clusters==cluster_to_split)
+        cols = np.where(col_clusters==cluster_to_split)[0]
         cols_scores = scores[col_clusters==cluster_to_split,cluster_to_split]
         cols = cols[cols_scores>=np.median(cols_scores)]
         new_col_clusters = np.copy(col_clusters)
@@ -519,7 +519,7 @@ class MSCOAL(SCOAL):
             
             coclusters, models = np.copy(self.coclusters),np.copy(self.models)
             cols_score = np.sum(self._score_coclusters(data,test_mask,coclusters,models))/np.sum(test_mask)
-            new_col_clusters = self._split_row_clusters(data,fit_mask,test_mask,coclusters,models)
+            new_col_clusters = self._split_col_clusters(data,fit_mask,test_mask,coclusters,models)
             coclusters = (coclusters[0],new_col_clusters)
             models = self._initialize_models(fit_mask,coclusters)
             coclusters,models = self._converge_scoal(data,fit_mask,coclusters,models,False)
@@ -533,7 +533,7 @@ class MSCOAL(SCOAL):
                 col_clusters_changed = True
 
             delta_score = score
-            score =  np.sum(self._score_coclusters(data,test_mask,coclusters,models))/np.sum(test_mask)
+            score =  np.sum(self._score_coclusters(data,test_mask,self.coclusters,self.models))/np.sum(test_mask)
             delta_score -= score
             converged = not row_clusters_changed and not col_clusters_changed
             iter_count+=1
