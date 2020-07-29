@@ -435,7 +435,11 @@ class MSCOAL(SCOAL):
         cluster_to_split = scores.mean(axis=0).argmax()
         rows = np.where(row_clusters==cluster_to_split)[0]
         rows_scores = scores[row_clusters==cluster_to_split,cluster_to_split]
-        rows = rows[rows_scores>=np.median(rows_scores)]
+        rows = rows[np.argsort(rows)]
+        rows_scores = np.sort(rows_scores)
+        rows1 = np.array_split(rows[rows_scores==0],2)[1]
+        rows2 = np.array_split(rows[rows_scores>0],2)[1]
+        rows = np.concatenate((rows1,rows2))
         new_row_clusters = np.copy(row_clusters)
         new_row_clusters[rows] = n_row_clusters
 
@@ -452,7 +456,11 @@ class MSCOAL(SCOAL):
         cluster_to_split = scores.mean(axis=0).argmax()
         cols = np.where(col_clusters==cluster_to_split)[0]
         cols_scores = scores[col_clusters==cluster_to_split,cluster_to_split]
-        cols = cols[cols_scores>=np.median(cols_scores)]
+        cols = cols[np.argsort(cols_scores)]
+        cols_scores = np.sort(cols_scores)
+        cols1 = np.array_split(cols[cols_scores==0],2)[1]
+        cols2 = np.array_split(cols[cols_scores>0],2)[1]
+        cols = np.concatenate((cols1,cols2))
         new_col_clusters = np.copy(col_clusters)
         new_col_clusters[cols] = n_col_clusters
 
@@ -505,7 +513,7 @@ class MSCOAL(SCOAL):
             coclusters, models = np.copy(self.coclusters),np.copy(self.models)
             rows_score = np.sum(self._score_coclusters(data,test_mask,coclusters,models))/np.sum(test_mask)
             new_row_clusters = self._split_row_clusters(data,fit_mask,test_mask,coclusters,models)
-            coclusters = (new_row_clusters,coclusters[1])
+            coclusters[0] = new_row_clusters
             models = self._initialize_models(fit_mask,coclusters)
             coclusters,models = self._converge_scoal(data,fit_mask,coclusters,models,False)
             rows_delta_score = rows_score
@@ -516,11 +524,11 @@ class MSCOAL(SCOAL):
                 self.coclusters =  np.copy(coclusters)
                 self.models = np.copy(models)
                 row_clusters_changed = True
-            
+
             coclusters, models = np.copy(self.coclusters),np.copy(self.models)
             cols_score = np.sum(self._score_coclusters(data,test_mask,coclusters,models))/np.sum(test_mask)
             new_col_clusters = self._split_col_clusters(data,fit_mask,test_mask,coclusters,models)
-            coclusters = (coclusters[0],new_col_clusters)
+            coclusters[1] = new_col_clusters
             models = self._initialize_models(fit_mask,coclusters)
             coclusters,models = self._converge_scoal(data,fit_mask,coclusters,models,False)
             cols_delta_score = cols_score
