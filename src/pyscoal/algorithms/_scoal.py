@@ -1,6 +1,6 @@
 import numpy as np
 import time
-from sklearn.base import clone, is_classifier
+from sklearn.base import clone, is_regressor
 from sklearn.linear_model import LinearRegression
 from joblib import Parallel, delayed, Memory
 
@@ -28,13 +28,14 @@ class SCOAL():
         self.n_jobs = n_jobs
         self.cache=cache
         self.verbose = verbose
-        self.is_classifier = is_classifier(estimator)
+        self.is_regressor = is_regressor(estimator)
 
-    def _scoring(self,y_true,y_pred):
-        if self.is_classifier:
-            pass #to do
-        else:
+    def _scoring(self,y_true,y_pred):   
+        if self.is_regressor:
             return np.sum((y_true-y_pred)**2)
+        else:
+            return np.sum(-1*(y_true*np.log(y_pred)+(1-y_true)*np.log(1-y_pred)))
+
 
     def _random_init(self,mask,n_row_clusters,n_col_clusters):
         n_rows, n_cols = mask.shape
@@ -43,27 +44,8 @@ class SCOAL():
         
         return row_clusters, col_clusters 
         
-    def _smart_init(self,mask,n_row_clusters,n_col_clusters):
-        n_rows, n_cols = mask.shape
-        row_clusters = np.zeros(n_rows)*np.nan
-        col_clusters = np.zeros(n_cols)*np.nan
-        row_clusters_aux = np.zeros((n_row_clusters,n_cols))
-        for row in np.arange(n_rows):
-            row_cluster = np.argmax((mask[row,:]>row_clusters_aux).sum(axis=1))
-            row_clusters_aux[row_cluster]=np.logical_or(row_clusters_aux[row_cluster],mask[row,:])
-            row_clusters[row] = row_cluster
-        col_clusters_aux = np.zeros((n_col_clusters,n_row_clusters))
-        for col in np.arange(n_cols):
-            col_cluster = np.argmax((row_clusters_aux[:,col]>col_clusters_aux).sum(axis=1))
-            col_clusters_aux[col_cluster]=np.logical_or(col_clusters_aux[col_cluster],row_clusters_aux[:,col])
-            col_clusters[col] = col_cluster
-    
-        return row_clusters.astype(int),col_clusters.astype(int)
-
     def _initialize_coclusters(self,mask,n_row_clusters,n_col_clusters,how):
-        if how=='smart':
-            row_clusters, col_clusters = self._smart_init(mask,n_row_clusters,n_col_clusters)
-        elif isinstance(how,(list,tuple,np.ndarray)):
+        if isinstance(how,(list,tuple,np.ndarray)):
             row_clusters, col_clusters = self.init[0], self.init[1]
         else:
             row_clusters, col_clusters = self._random_init(mask,n_row_clusters,n_col_clusters)
@@ -162,7 +144,7 @@ class SCOAL():
             model = self._cached_fit(model,X,y,rows,cols)
         else:
             model.fit(X,y)
-        y_pred = model.predict(X)
+        y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
 
         return model, y_pred 
 
@@ -176,7 +158,7 @@ class SCOAL():
                 model = self._cached_fit(model,X,y,rows,cols)
             else:
                 model.fit(X,y)
-            y_pred = model.predict(X)
+            y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
             score = self._scoring(y,y_pred)
 
         return model, score  
@@ -195,7 +177,7 @@ class SCOAL():
         model = models[row_cluster][col_cluster]
         score = 0
         if y.size > 0:
-            y_pred = model.predict(X)
+            y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
             score = self._scoring(y,y_pred)
 
         return score 
@@ -207,7 +189,7 @@ class SCOAL():
         for row in rows:
             X, y = self._get_X_y(data,mask,[row],cols)
             if y.size > 0:
-                y_pred = model.predict(X)
+                y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
                 scores[row] = self._scoring(y,y_pred)
 
         return scores
@@ -219,7 +201,7 @@ class SCOAL():
         for col in cols:
             X, y = self._get_X_y(data,mask,rows,[col])
             if y.size > 0:
-                y_pred = model.predict(X)
+                y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
                 scores[col] = self._scoring(y,y_pred)
 
         return scores
