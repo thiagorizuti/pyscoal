@@ -131,11 +131,13 @@ class SCOAL():
         rows,cols = self._get_rows_cols(coclusters,row_cluster,col_cluster)
         X, y = self._get_X_y(data,rows,cols)
         model = models[row_cluster][col_cluster]
-        if self.cache:
-            model = self._cached_fit(model,X,y,rows,cols)
-        else:
-            model.fit(X,y)
-        y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
+        y_pred = np.nan
+        if X.size >0:
+            if self.cache:
+                model = self._cached_fit(model,X,y,rows,cols)
+            else:
+                model.fit(X,y)
+            y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
 
         return model, y_pred 
 
@@ -158,8 +160,9 @@ class SCOAL():
         rows,cols = self._get_rows_cols(coclusters,row_cluster,col_cluster)
         X,_ = self._get_X_y(data,rows,cols)
         model = models[row_cluster][col_cluster]
-        y_pred = model.predict(X)
-
+        y_pred = np.nan
+        if X.size >0:
+            y_pred = model.predict(X)
         return y_pred 
     
     def _score(self,data,coclusters,models,row_cluster,col_cluster):
@@ -349,15 +352,15 @@ class SCOAL():
         
     def predict(self,target,row_features,col_features,pred_mask=None):
         if self.matrix=='dense':
-            rows, cols, values = target[:,0].astype(int), target[:,1].astype(int), target[:,2]
+            rows, cols = target[:,0].astype(int), target[:,1].astype(int)
             matrix = np.zeros((self.n_rows, self.n_cols))*np.nan
-            matrix[rows,cols] = values
+            matrix[rows,cols] = 0
         else:
-            matrix = target  
-        data = (matrix,row_features,col_features)
+            matrix = np.hstack((target,np.zeros((target.shape[0],1))))  
+        data = (matrix,row_features,col_features)     
 
         coclusters_predictions = self._predict_coclusters(data,self.coclusters,self.models)
-        predictions = np.zeros(target.shape[0])
+        predictions = np.zeros(target.shape[0],dtype='float64')
 
         row_clusters, col_clusters = self.coclusters
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
