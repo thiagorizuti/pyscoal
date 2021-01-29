@@ -62,18 +62,6 @@ class SCOAL():
 
         return models
 
-    def _check_coclusters(self,matrix,coclusters):
-        mask = np.invert(np.isnan(matrix)) 
-        row_clusters, col_clusters = coclusters
-        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
-        valid = np.zeros((n_row_clusters,n_col_clusters)).astype(bool)
-        for i in range(n_row_clusters):
-            for j in range(n_col_clusters):
-                rows,cols = self._get_rows_cols(coclusters,i,j)
-                valid[i,j] = mask[np.ix_(rows,cols)].any()
-        
-        return valid
-
     def _get_rows_cols(self,coclusters,row_cluster,col_cluster):
         row_clusters, col_clusters = coclusters
         if row_cluster is None:
@@ -109,6 +97,13 @@ class SCOAL():
                 col_features[matrix[rows&cols,1].astype(int),:]))
 
         return X, y
+
+    def _check(self,data,coclusters,models,row_cluster,col_cluster):
+        rows,cols = self._get_rows_cols(coclusters,row_cluster,col_cluster)
+        _, y = self._get_X_y(data,rows,cols)
+        checked = y.size > 0
+
+        return checked
 
     def _cached_fit(self,model,X,y,rows,cols):
         model.fit(X,y)
@@ -250,6 +245,15 @@ class SCOAL():
 
         return new_row_clusters,new_col_clusters
 
+    def _check_coclusters(self,data,coclusters,models):
+        row_clusters, col_clusters = coclusters
+        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
+        results = self._compute_parallel(data,coclusters,models,self._check)
+        checked =  [[results[i*n_col_clusters+j]
+            for j in range(n_col_clusters)] for i in range(n_row_clusters)]
+        
+        return checked
+
     def _fit_coclusters(self,data,coclusters,models):
         row_clusters, col_clusters = coclusters
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
@@ -322,6 +326,7 @@ class SCOAL():
         
         self.elapsed_time = elapsed_time
         self.n_iter = iter_count
+        self.score = score
 
         return coclusters,models
 
