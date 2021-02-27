@@ -45,19 +45,19 @@ class SCOAL():
         
         return row_clusters, col_clusters 
         
-    def _initialize_coclusters(self,n_rows,n_cols,n_row_clusters,n_col_clusters,init):
-        if isinstance(init,(list,tuple,np.ndarray)):
-            row_clusters, col_clusters = init[0], init[1]
+    def _initialize_coclusters(self,n_row_clusters,n_col_clusters):
+        if isinstance(self.init,(list,tuple,np.ndarray)):
+            row_clusters, col_clusters = self.init[0], self.init[1]
         else:
-            row_clusters, col_clusters = self._random_init(n_rows,n_cols,n_row_clusters,n_col_clusters)
+            row_clusters, col_clusters = self._random_init(self.n_rows,self.n_cols,n_row_clusters,n_col_clusters)
         coclusters = (row_clusters, col_clusters)
 
         return coclusters
 
-    def _initialize_models(self,coclusters,estimator):
+    def _initialize_models(self,coclusters):
         row_clusters, col_clusters = coclusters
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
-        models = [[clone(estimator) for j in range(n_col_clusters)] 
+        models = [[clone(self.estimator) for j in range(n_col_clusters)] 
                             for i in range(n_row_clusters)]
 
         return models
@@ -153,7 +153,7 @@ class SCOAL():
     
     def _predict(self,data,coclusters,models,row_cluster,col_cluster):
         rows,cols = self._get_rows_cols(coclusters,row_cluster,col_cluster)
-        X,_ = self._get_X_y(data,rows,cols)
+        X,y = self._get_X_y(data,rows,cols)
         model = models[row_cluster][col_cluster]
         y_pred = np.nan
         if X.size >0:
@@ -326,7 +326,7 @@ class SCOAL():
         
         self.elapsed_time = elapsed_time
         self.n_iter = iter_count
-        self.score = score
+        self.scores = scores
 
         return coclusters,models
 
@@ -347,21 +347,24 @@ class SCOAL():
             self.memory = Memory('./pyscoal-cache')
             self.method = self.memory.cache(self._cached_fit, ignore=['self','model','X','y','rows','cols'])
     
-        self.coclusters = self._initialize_coclusters(self.n_rows,self.n_cols,self.n_row_clusters,self.n_col_clusters,self.init)
-        self.models = self._initialize_models(self.coclusters,self.estimator)
+        self.coclusters = self._initialize_coclusters(self.n_row_clusters,self.n_col_clusters)
+        self.models = self._initialize_models(self.coclusters)
         
         self.coclusters,self.models = self._converge_scoal(data,self.coclusters,self.models,self.verbose)
 
         if self.cache:
             self.memory.clear(warn=False)
         
-    def predict(self,target,row_features,col_features,pred_mask=None):
+    def predict(self,target,row_features,col_features):
         if self.matrix=='dense':
             rows, cols = target[:,0].astype(int), target[:,1].astype(int)
             matrix = np.zeros((self.n_rows, self.n_cols))*np.nan
             matrix[rows,cols] = 0
+            sorting = np.lexsort((target[:, 1],target[:, 0]))
         else:
             matrix = np.hstack((target,np.zeros((target.shape[0],1))))  
+            sorting = np.arange(target.shape[0])
+
         data = (matrix,row_features,col_features)     
 
         coclusters_predictions = self._predict_coclusters(data,self.coclusters,self.models)
@@ -371,13 +374,15 @@ class SCOAL():
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
         for row_cluster in range(n_row_clusters):
             for col_cluster in range(n_col_clusters):
-                rows = row_clusters[target[:,0].astype(int)]==row_cluster
-                cols = col_clusters[target[:,1].astype(int)]==col_cluster
-                predictions[rows&cols] = coclusters_predictions[row_cluster][col_cluster]
+                    rows = row_clusters[target[sorting,0].astype(int)]==row_cluster
+                    cols = col_clusters[target[sorting,1].astype(int)]==col_cluster
+                    predictions[rows&cols] = coclusters_predictions[row_cluster][col_cluster]
+        
+        predictions = predictions[np.argsort(sorting)]
 
         return predictions
     
-    def score(self,target,row_features,col_features,pred_mask=None):
+    def score(self,target,row_features,col_features):
         if self.matrix=='dense':
             rows, cols, values = target[:,0].astype(int), target[:,1].astype(int), target[:,2]
             matrix = np.zeros((self.n_rows, self.n_cols))*np.nan

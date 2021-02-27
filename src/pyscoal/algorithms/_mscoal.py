@@ -57,7 +57,7 @@ class MSCOAL(SCOAL):
 
             new_row_clusters = self._split_row_clusters(valid_data,coclusters,models)
             new_coclusters = (new_row_clusters,coclusters[1])
-            new_models = self._initialize_models(new_coclusters,self.estimator)
+            new_models = self._initialize_models(new_coclusters)
             checked = np.all(self._check_coclusters(train_data,coclusters,models))
             if checked:
                 new_coclusters,new_models = self._converge_scoal(train_data,new_coclusters,new_models,False)
@@ -74,7 +74,7 @@ class MSCOAL(SCOAL):
 
             new_col_clusters = self._split_col_clusters(valid_data,coclusters,models)
             new_coclusters = (coclusters[0],new_col_clusters)
-            new_models = self._initialize_models(new_coclusters,self.estimator)
+            new_models = self._initialize_models(new_coclusters)
             checked = np.all(self._check_coclusters(train_data,coclusters,models))
             if checked:
                 new_coclusters,new_models = self._converge_scoal(train_data,new_coclusters,new_models,False)
@@ -104,7 +104,7 @@ class MSCOAL(SCOAL):
         train_data = (train_matrix,row_features,col_features)
 
         coclusters, models = self._converge_scoal(train_data,coclusters,models,False)
-        scores = self._score_coclusters(valid_data,coclusters,models)
+        scores = self._score_coclusters(train_data,coclusters,models)
         score = np.sum(scores)
 
         if self.verbose:
@@ -112,7 +112,7 @@ class MSCOAL(SCOAL):
 
         self.elapsed_time = time.time() - start
         self.n_iter = iter_count
-        self.score = score
+        self.scores = scores
 
         return coclusters,models
 
@@ -170,8 +170,8 @@ class MSCOAL(SCOAL):
         
         self.n_rows, self.n_cols, self.n_values = row_features.shape[0], col_features.shape[0], target.shape[0]
         
-        valid = np.sort(np.random.choice(np.arange(target.shape[0]),int(target.shape[0]*self.validation_size),replace=False))
-        train = np.sort(np.setdiff1d(np.arange(target.shape[0]),valid))
+        valid = np.sort(np.random.choice(np.arange(self.n_values),int(self.n_values*self.validation_size),replace=False))
+        train = np.sort(np.setdiff1d(np.arange(self.n_values),valid))
         valid_target = target[valid]
         train_target = target[train] 
 
@@ -195,8 +195,8 @@ class MSCOAL(SCOAL):
             self.method = self.memory.cache(self._cached_fit, ignore=['self','model','X','y','rows','cols'])\
 
         self.n_row_clusters,self.n_col_clusters = 1, 1
-        self.coclusters = self._initialize_coclusters(self.n_rows,self.n_cols,self.n_row_clusters,self.n_col_clusters,self.init)
-        self.models = self._initialize_models(self.coclusters,self.estimator)
+        self.coclusters = self._initialize_coclusters(self.n_row_clusters,self.n_col_clusters)
+        self.models = self._initialize_models(self.coclusters)
         
         self.coclusters,self.models = self._converge_mscoal(train_data,valid_data,self.coclusters,self.models,self.verbose)
         row_clusters, col_clusters = self.coclusters
