@@ -9,9 +9,10 @@ class MSCOAL(SCOAL):
     
     def __init__(self, 
                 estimator=LinearRegression(), 
-                tol = 1e-4, 
+                max_split = 100,
+                tol = 0.01, 
+                iter_tol = 10,
                 max_iter = 100,
-                minimize = True,
                 validation_size=0.2,
                 init='random',
                 random_state=42,
@@ -21,7 +22,9 @@ class MSCOAL(SCOAL):
                 verbose=False):
         
         self.estimator = estimator
+        self.max_split = max_split
         self.tol = tol
+        self.iter_tol = iter_tol
         self.max_iter = max_iter
         self.validation_size=validation_size
         self.init = init
@@ -37,6 +40,7 @@ class MSCOAL(SCOAL):
         elapsed_time = 0
         score = np.nan
         delta_score=np.nan
+        delta_scores=np.ones(self.iter_tol)
         converged = False
         start = time.time()
 
@@ -89,7 +93,7 @@ class MSCOAL(SCOAL):
                     delta_score += new_delta_score
                     score = new_score
 
-            converged = not row_clusters_changed and not col_clusters_changed
+            converged = (not row_clusters_changed and not col_clusters_changed) or iter_count >= self.max_split
             iter_count+=1
             elapsed_time = time.time() - start
             if self.verbose:

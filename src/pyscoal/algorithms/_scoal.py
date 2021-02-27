@@ -10,7 +10,8 @@ class SCOAL():
                 estimator=LinearRegression(), 
                 n_row_clusters = 2, 
                 n_col_clusters = 2,
-                tol = 1e-4, 
+                tol = 0.01,
+                iter_tol = 10, 
                 max_iter = 100,
                 init='random',
                 random_state=42,
@@ -23,6 +24,7 @@ class SCOAL():
         self.n_row_clusters = n_row_clusters
         self.n_col_clusters = n_col_clusters
         self.tol = tol
+        self.iter_tol = iter_tol
         self.max_iter = max_iter
         self.init = init
         self.random_state = random_state
@@ -284,7 +286,7 @@ class SCOAL():
     def _log(self,iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time):
         if iter_count==0:
             print('|'.join(x.ljust(15) for x in [
-                    'iteration',' score','delta score','rows changed', 'columns changed', 'elapsed time (s)']))
+                    'iteration',' score','delta score (%)','rows changed', 'columns changed', 'elapsed time (s)']))
 
         print('|'.join(x.ljust(15) for x in ['%i' % iter_count,'%.4f' % score,'%.4f' % delta_score,'%i' % rows_changed,'%i'  % cols_changed,'%i' % elapsed_time]))
 
@@ -295,6 +297,7 @@ class SCOAL():
         cols_changed = 0
         score = np.nan
         delta_score=np.nan
+        delta_scores=np.ones(self.iter_tol)
         converged = False
         start = time.time()
 
@@ -310,14 +313,15 @@ class SCOAL():
             rows_changed = np.sum(new_row_clusters!=coclusters[0])
             cols_changed = np.sum(new_col_clusters!=coclusters[1])
             coclusters = (new_row_clusters, new_col_clusters)
-            delta_score = score
+            old_score = score
             models, scores = self._update_models(data,coclusters,models)
             score = np.sum(scores)           
-            delta_score -= score
+            delta_score = (old_score-score)/old_score
+            delta_scores[iter_count%self.iter_tol] = delta_score
             iter_count += 1
             converged = (
                 iter_count >= self.max_iter or
-                (delta_score > 0 and delta_score < self.tol) or
+                (np.max(delta_scores) < self.tol) or
                 (rows_changed==0 and cols_changed==0)
             )   
             elapsed_time = time.time() - start
