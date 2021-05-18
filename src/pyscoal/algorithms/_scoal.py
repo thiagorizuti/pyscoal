@@ -13,11 +13,10 @@ class SCOAL():
                 tol = 0.01,
                 iter_tol = 10, 
                 max_iter = 100,
-                init='random',
                 random_state=42,
                 n_jobs=1,
                 cache=False,
-                matrix='dense',
+                matrix='sparse',
                 verbose=False):
 
         self.estimator = estimator
@@ -26,7 +25,6 @@ class SCOAL():
         self.tol = tol
         self.iter_tol = iter_tol
         self.max_iter = max_iter
-        self.init = init
         self.random_state = random_state
         self.n_jobs = n_jobs
         self.cache=cache
@@ -40,17 +38,9 @@ class SCOAL():
         else:
             return np.sum(-1*(y_true*np.log(y_pred)+(1-y_true)*np.log(1-y_pred)))
 
-    def _random_init(self,n_rows,n_cols,n_row_clusters,n_col_clusters):
-        row_clusters = np.random.choice(np.arange(n_row_clusters),n_rows)
-        col_clusters = np.random.choice(np.arange(n_col_clusters),n_cols)
-        
-        return row_clusters, col_clusters 
-
     def _initialize_coclusters(self,n_row_clusters,n_col_clusters):
-        if isinstance(self.init,(list,tuple,np.ndarray)):
-            row_clusters, col_clusters = self.init[0], self.init[1]
-        else:
-            row_clusters, col_clusters = self._random_init(self.n_rows,self.n_cols,n_row_clusters,n_col_clusters)
+        row_clusters = np.random.choice(np.arange(n_row_clusters),self.n_rows)
+        col_clusters = np.random.choice(np.arange(n_col_clusters),self.n_cols)
         coclusters = (row_clusters, col_clusters)
 
         return coclusters
@@ -131,7 +121,7 @@ class SCOAL():
     def _check(self,data,coclusters,models,row_cluster,col_cluster):
         rows,cols = self._get_rows_cols(coclusters,row_cluster,col_cluster)
         y = self._get_y(data,rows,cols)
-        checked = y.size > 0
+        checked = y.size
 
         return checked
 
@@ -140,6 +130,11 @@ class SCOAL():
         del X
         del y
         
+        return model
+    
+    def _sklearn_fit(self,model,X,y):
+        model.fit(X,y)
+
         return model
 
     def _fit(self,data,coclusters,models,row_cluster,col_cluster):
@@ -150,14 +145,9 @@ class SCOAL():
             if self.cache:
                 model = self._cached_fit(model,X,y,rows,cols)
             else:
-                model.fit(X,y)
+                model = self._sklearn_fit(model,X,y)
         del X
         del y
-
-        return model
-    
-    def _sklearn_fit(self,model,X,y):
-        model.fit(X,y)
 
         return model
 
@@ -170,7 +160,7 @@ class SCOAL():
             if self.cache:
                 model = self._cached_fit(model,X,y,rows,cols)
             else:
-                model.fit(X,y)
+                model = self._sklearn_fit(model,X,y)
             y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
 
         return model, y_pred 
@@ -244,22 +234,21 @@ class SCOAL():
 
         return scores
 
-    def _compute_clusterwise(self,data,coclusters,models,function):
-
+    def _compute_clusterwise(self,data,coclusters,models,function,n_jobs):    
         row_clusters, col_clusters = coclusters
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
 
-        results = Parallel(n_jobs=self.n_jobs,backend='loky')(delayed(function)
+        results = Parallel(n_jobs=n_jobs,backend='loky')(delayed(function)
             (data,coclusters,models,i,j) for i in range(n_row_clusters) for j in range(n_col_clusters))
         results = [[results[i*n_col_clusters+j]
             for j in range(n_col_clusters)] for i in range(n_row_clusters)]
 
         return results
 
-    def _update_models(self,data,coclusters,models):
+    def _update_models(self,data,coclusters,models,n_jobs):
         row_clusters, col_clusters = coclusters
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
-        results = self._compute_clusterwise(data,coclusters,models,self._fit_score)
+        results = self._compute_clusterwise(data,coclusters,models,self._fit_score,n_jobs)
         models =  [[results[i][j][0]
             for j in range(n_col_clusters)] for i in range(n_row_clusters)]
         scores = np.array([[results[i][j][1]
@@ -267,10 +256,10 @@ class SCOAL():
 
         return models, scores
 
-    def _update_row_clusters(self,data,coclusters,models):
+    def _update_row_clusters(self,data,coclusters,models,n_jobs):
         row_clusters, col_clusters = coclusters
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
-        results = self._compute_clusterwise(data,coclusters,models,self._score_rows)
+        results = self._compute_clusterwise(data,coclusters,models,self._score_rows,n_jobs)
         scores = np.zeros((row_clusters.size,n_row_clusters))
         for i in range(n_row_clusters):
             for j in range(n_col_clusters):
@@ -279,10 +268,10 @@ class SCOAL():
 
         return new_row_clusters
 
-    def _update_col_clusters(self,data,coclusters,models):
+    def _update_col_clusters(self,data,coclusters,models,n_jobs):
         row_clusters, col_clusters = coclusters
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
-        results = self._compute_clusterwise(data,coclusters,models,self._score_cols)
+        results = self._compute_clusterwise(data,coclusters,models,self._score_cols,n_jobs)
         scores = np.zeros((col_clusters.size,n_col_clusters))
         for i in range(n_row_clusters):
             for j in range(n_col_clusters):
@@ -291,32 +280,32 @@ class SCOAL():
 
         return new_col_clusters
 
-    def _update_coclusters(self,data,coclusters,models):
-        new_row_clusters = self._update_row_clusters(data,coclusters,models)
-        new_col_clusters = self._update_col_clusters(data,coclusters,models)
+    def _update_coclusters(self,data,coclusters,models,n_jobs):
+        new_row_clusters = self._update_row_clusters(data,coclusters,models,n_jobs)
+        new_col_clusters = self._update_col_clusters(data,coclusters,models,n_jobs)
 
         return new_row_clusters,new_col_clusters
 
-    def _check_coclusters(self,data,coclusters,models):
-        results = self._compute_clusterwise(data,coclusters,models,self._check)
+    def _check_coclusters(self,data,coclusters,models,n_jobs):
+        results = self._compute_clusterwise(data,coclusters,models,self._check,n_jobs)
         checked = np.array(results)
         
         return checked
 
-    def _fit_coclusters(self,data,coclusters,models):
-        results = self._compute_clusterwise(data,coclusters,models,self._fit)
+    def _fit_coclusters(self,data,coclusters,models,n_jobs):
+        results = self._compute_clusterwise(data,coclusters,models,self._fit,n_jobs)
         models = results
         
         return models
 
-    def _predict_coclusters(self,data,coclusters,models):
-        results = self._compute_clusterwise(data,coclusters,models,self._predict)
+    def _predict_coclusters(self,data,coclusters,models,n_jobs):
+        results = self._compute_clusterwise(data,coclusters,models,self._predict,n_jobs)
         predictions = np.array(results)
         
         return predictions
 
-    def _score_coclusters(self,data,coclusters,models):
-        results = self._compute_clusterwise(data,coclusters,models,self._score)
+    def _score_coclusters(self,data,coclusters,models,n_jobs):
+        results = self._compute_clusterwise(data,coclusters,models,self._score,n_jobs)
         scores = np.array(results)
         
         return scores
@@ -327,56 +316,59 @@ class SCOAL():
                     'iteration',' score','delta score (%)','rows changed', 'columns changed', 'elapsed time (s)']))
 
         print('|'.join(x.ljust(15) for x in ['%i' % iter_count,'%.4f' % score,'%.4f' % delta_score,'%i' % rows_changed,'%i'  % cols_changed,'%i' % elapsed_time]))
-
-    def _converge_scoal(self,data,coclusters,models,verbose):
+    
+    def _converge_scoal(self,data,coclusters,models,tol=0.01,iter_tol=10,max_iter=10,n_jobs=1,verbose=False):
         iter_count=0 
         elapsed_time = 0
         rows_changed = 0
         cols_changed = 0
         score = np.nan
         delta_score=np.nan
-        delta_scores=np.ones(self.iter_tol)
+        delta_scores=np.ones(iter_tol)
         converged = False
         start = time.time()
 
-        models, scores = self._update_models(data,coclusters,models)
+        if coclusters is None:
+            coclusters = self._initialize_coclusters(self.n_row_clusters,self.n_col_clusters)
+        
+        if models is None:
+            models = self._initialize_models(coclusters)
+
+        models, scores = self._update_models(data,coclusters,models,n_jobs)
         score = np.sum(scores)/self.n_values
 
         if verbose:
             self._log(iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time)
         
-        converged = iter_count == self.max_iter 
+        converged = iter_count == max_iter 
         
         while not converged:
-            new_row_clusters, new_col_clusters = self._update_coclusters(data,coclusters,models)     
+            new_row_clusters, new_col_clusters = self._update_coclusters(data,coclusters,models,n_jobs)     
             rows_changed = np.sum(new_row_clusters!=coclusters[0])
             cols_changed = np.sum(new_col_clusters!=coclusters[1])
             coclusters = (new_row_clusters, new_col_clusters)
             old_score = score
-            models, scores = self._update_models(data,coclusters,models)
+            models, scores = self._update_models(data,coclusters,models,n_jobs)
             score = np.sum(scores)/self.n_values
             delta_score = (old_score-score)/old_score
-            delta_scores[iter_count%self.iter_tol] = delta_score
+            delta_scores[iter_count%iter_tol] = delta_score
             iter_count += 1
             converged = (
-                iter_count >= self.max_iter or
-                (np.max(delta_scores) < self.tol) or
+                iter_count >= max_iter or
+                (np.max(delta_scores) < tol) or
                 (rows_changed==0 and cols_changed==0)
             )   
             elapsed_time = time.time() - start
             if verbose:
                 self._log(iter_count,score,delta_score,rows_changed,cols_changed,elapsed_time)
-        
-        self.elapsed_time = elapsed_time
-        self.n_iter = iter_count
-        self.scores = scores
 
-        return coclusters,models
+        return coclusters, models 
 
-    def fit(self,target,row_features,col_features):
+    def fit(self,target,row_features,col_features,coclusters=None):
         np.random.seed(self.random_state) 
 
         self.n_rows, self.n_cols, self.n_values = row_features.shape[0], col_features.shape[0], target.shape[0]
+        self.n_row_features, self.n_col_features  = row_features.shape[1], col_features.shape[1]        
         if self.matrix=='dense':
             matrix = np.zeros((self.n_rows, self.n_cols))*np.nan
             matrix[target[:,0].astype(int),target[:,1].astype(int)] = target[:,2]
@@ -388,17 +380,16 @@ class SCOAL():
    
         if self.cache:
             self.memory = Memory('./pyscoal-cache')
-            self.method = self.memory.cache(self._cached_fit, ignore=['self','model','X','y','rows','cols'])
-    
-        self.coclusters = self._initialize_coclusters(self.n_row_clusters,self.n_col_clusters)
-        self.models = self._initialize_models(self.coclusters)
-        
-        self.coclusters,self.models = self._converge_scoal(data,self.coclusters,self.models,self.verbose)
+            self._cached_fit = self.memory.cache(self._cached_fit, ignore=['self','model','X','y'])
+     
+        self.coclusters,self.models = self._converge_scoal(data,coclusters,None,self.tol,self.iter_tol,self.max_iter,self.n_jobs,self.verbose)
 
         if self.cache:
             self.memory.clear(warn=False)
 
     def predict(self,target,row_features,col_features):
+        n_rows, n_cols, n_values = row_features.shape[0], col_features.shape[0], target.shape[0]
+        n_row_features, n_col_features  = row_features.shape[1], col_features.shape[1]    
         if self.matrix=='dense':
             rows, cols = target[:,0].astype(int), target[:,1].astype(int)
             matrix = np.zeros((self.n_rows, self.n_cols))*np.nan
@@ -407,12 +398,11 @@ class SCOAL():
         else:
             matrix = np.hstack((target,np.zeros((target.shape[0],1))))  
             sorting = np.arange(target.shape[0])
-        del target
 
         data = (matrix,row_features,col_features)     
 
-        coclusters_predictions = self._predict_coclusters(data,self.coclusters,self.models)
-        predictions = np.zeros(target.shape[0],dtype='float64')
+        coclusters_predictions = self._predict_coclusters(data,self.coclusters,self.models,self.n_jobs)
+        predictions = np.zeros(n_values,dtype='float64')
 
         row_clusters, col_clusters = self.coclusters
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
@@ -427,17 +417,20 @@ class SCOAL():
         return predictions
     
     def score(self,target,row_features,col_features):
+        n_rows, n_cols, n_values = row_features.shape[0], col_features.shape[0], target.shape[0]
+        n_row_features, n_col_features  = row_features.shape[1], col_features.shape[1]    
+
         if self.matrix=='dense':
-            rows, cols, values = target[:,0].astype(int), target[:,1].astype(int), target[:,2]
-            matrix = np.zeros((self.n_rows, self.n_cols))*np.nan
-            matrix[rows,cols] = values
+                rows, cols, values = target[:,0].astype(int), target[:,1].astype(int), target[:,2]
+                matrix = np.zeros((self.n_rows, self.n_cols))*np.nan
+                matrix[rows,cols] = values
         else:
             matrix = target 
-        del target
 
         data = (matrix,row_features,col_features)        
 
-        coclusters_scores = self._score_coclusters(data,self.coclusters,self.models)
-        score = np.sum(coclusters_scores)   
+        coclusters_scores = self._score_coclusters(data,self.coclusters,self.models,self.n_jobs)
+
+        score = np.sum(coclusters_scores)/n_values  
 
         return score 
