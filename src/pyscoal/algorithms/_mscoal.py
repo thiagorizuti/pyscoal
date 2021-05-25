@@ -35,7 +35,7 @@ class MSCOAL(SCOAL):
         scores = np.zeros((row_clusters.size,n_row_clusters))
         for i in range(n_row_clusters):
             for j in range(n_col_clusters):
-                scores[:,j] += results[i][j] 
+                scores[:,i] += results[i][j] 
         cluster_to_split = scores.mean(axis=0).argmax()
         rows = np.where(row_clusters==cluster_to_split)[0]
         rows_scores = scores[row_clusters==cluster_to_split,cluster_to_split]
