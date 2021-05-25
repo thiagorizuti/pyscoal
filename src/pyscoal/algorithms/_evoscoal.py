@@ -8,8 +8,6 @@ from joblib import Parallel, delayed, Memory
 from copy import deepcopy
 from ._scoal import SCOAL
 
-## implementar alocao scoal-like,aleatorio e knn 
-
 class EvoSCOAL(SCOAL):
     
     def __init__(self,
@@ -404,7 +402,7 @@ class EvoSCOAL(SCOAL):
     def _converge_evoscoal(self,train_data,valid_data,population,max_gen=5,gen_tol=10,tol=0.01,n_jobs=(1,1),verbose=False):
         converged = False
         gen_count = 0
-        delta_fitness_arr=np.ones(iter)
+        delta_fitness_arr=np.ones(gen_tol)
         delta_fitness = np.nan
         rate = 1
         infeasible = 0
@@ -420,7 +418,7 @@ class EvoSCOAL(SCOAL):
         converged = gen_count >= max_gen 
 
         if verbose:
-            self._print_status(gen_count,population,fitness,rate,infeasible,elapsed_time)
+            self._print_status(gen_count,delta_fitness,population,fitness,rate,infeasible,elapsed_time)
         
         while not converged:
 
@@ -510,7 +508,7 @@ class EvoSCOAL(SCOAL):
             self.memory = Memory('./pyscoal-cache')
             self._cached_fit = self.memory.cache(self._cached_fit, ignore=['self','model','X','y'])
 
-        self.coclusters, self.models = self._converge_evoscoal(train_data,valid_data,None,self.max_gen,self.n_jobs,self.verbose)
+        self.coclusters, self.models = self._converge_evoscoal(train_data,valid_data,None,self.max_gen,self.gen_tol,self.tol,self.n_jobs,self.verbose)
         row_clusters, col_clusters = self.coclusters
         self.n_row_clusters, self.n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
         self.n_jobs = self.n_jobs[1]
