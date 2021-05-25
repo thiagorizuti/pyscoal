@@ -17,6 +17,8 @@ class EvoSCOAL(SCOAL):
                 max_col_clusters=5,
                 pop_size=5,
                 max_gen=50,
+                gen_tol=10,
+                tol=0.01,
                 estimator=LinearRegression(),
                 validation_size=0.2,
                 mutation_strength='max',
@@ -31,6 +33,8 @@ class EvoSCOAL(SCOAL):
         self.max_col_clusters=max_col_clusters
         self.pop_size = pop_size
         self.max_gen = max_gen
+        self.gen_tol = gen_tol
+        self.tol = tol
         self.estimator=estimator
         self.validation_size=validation_size
         self.fitness_function = fitness_function
@@ -383,7 +387,7 @@ class EvoSCOAL(SCOAL):
         return rate, new_population, new_fitness, new_scores
 
 
-    def _print_status(self,iter_count,population,fitness,rate,infeasible,elapsed_time):
+    def _print_status(self,gen_count,delta_fitness,population,fitness,rate,infeasible,elapsed_time):
         best = np.nanmin(fitness)
         worst = np.nanmax(fitness)
         mean = np.nanmean(fitness)
@@ -391,15 +395,17 @@ class EvoSCOAL(SCOAL):
         max_size = sizes.max()
         min_size = sizes.min()
         mean_size = sizes.mean()
-        if iter_count==0:
+        if gen_count==0:
             print('|'.join(x.ljust(11) for x in [
-                    'generation','best fitness','worst fitness','mean fitness','max size','min size','mean size','survival rate','infeasible','elapsed time (s)']))
+                    'generation','delta fitness (%)','best fitness','worst fitness','mean fitness','max size','min size','mean size','survival rate','infeasible','elapsed time (s)']))
 
-        print('|'.join(x.ljust(11) for x in ['%i' % iter_count,'%.4f' % best,'%.4f' % worst,'%.4f'  % mean,'%i'  % max_size,'%i'  % min_size,'%.2f'  % mean_size, '%.4f' % rate ,'%i' % infeasible,'%i' % elapsed_time]))
+        print('|'.join(x.ljust(11) for x in ['%i' % gen_count,'%.4f' % delta_fitness,'%.4f' % best,'%.4f' % worst,'%.4f'  % mean,'%i'  % max_size,'%i'  % min_size,'%.2f'  % mean_size, '%.4f' % rate ,'%i' % infeasible,'%i' % elapsed_time]))
 
-    def _converge_evoscoal(self,train_data,valid_data,population,max_gen=5,n_jobs=(1,1),verbose=False):
+    def _converge_evoscoal(self,train_data,valid_data,population,max_gen=5,gen_tol=10,tol=0.01,n_jobs=(1,1),verbose=False):
         converged = False
         gen_count = 0
+        delta_fitness_arr=np.ones(iter)
+        delta_fitness = np.nan
         rate = 1
         infeasible = 0
         elapsed_time = 0
@@ -408,7 +414,7 @@ class EvoSCOAL(SCOAL):
         if population is None:
             population, fitness, scores = self._initialize_pop(train_data)
         fitness, scores = self._evaluate_fitness_pop(train_data,valid_data,population,fitness,scores,n_jobs)
-        
+        best = np.nanmin(fitness)
         infeasible = np.sum(np.isnan(fitness))
         
         converged = gen_count >= max_gen 
@@ -431,11 +437,16 @@ class EvoSCOAL(SCOAL):
             infeasible = np.sum(np.isnan(fitness)) + np.sum(np.isnan(mut_fitness))
             rate, population, fitness, scores = self._roullete_selection(population,fitness,scores,mut_population,mut_fitness,mut_scores) 
             
+            old_best = best
+            best = np.nanmin(fitness)
+            delta_fitness = (old_best-best)/old_best
+            delta_fitness_arr[gen_count%gen_tol] = delta_fitness
+            
             gen_count+=1
-            converged = gen_count == max_gen
+            converged = (gen_count == max_gen) or (np.nanmax(delta_fitness_arr) < tol)
             elapsed_time = time.time() - start
             if verbose:
-                self._print_status(gen_count,population,fitness,rate,infeasible,elapsed_time)
+                self._print_status(gen_count,delta_fitness,population,fitness,rate,infeasible,elapsed_time)
 
         if self.fitness_function=='SSE':
             train_matrix, row_features, col_features = train_data
