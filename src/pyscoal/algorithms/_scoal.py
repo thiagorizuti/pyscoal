@@ -53,18 +53,30 @@ class SCOAL():
 
         return models
 
-    def _get_rows_cols(self,coclusters,row_cluster,col_cluster):
-        row_clusters, col_clusters = coclusters
+    def _get_rows(self,row_clusters,row_cluster):
         if row_cluster is None:
             rows_mask = np.ones(row_clusters.size).astype(bool)
         else:
             rows_mask = row_clusters==row_cluster
+        
+        rows = np.argwhere(rows_mask).ravel()
+
+        return rows
+
+    def _get_cols(self,col_clusters,col_cluster):
         if col_cluster is None:
             cols_mask = np.ones(col_clusters.size).astype(bool)
         else:
             cols_mask = col_clusters==col_cluster
-        rows = np.argwhere(rows_mask).ravel()
+        
         cols = np.argwhere(cols_mask).ravel()
+
+        return cols
+
+    def _get_rows_cols(self,coclusters,row_cluster,col_cluster):
+        row_clusters, col_clusters = coclusters
+        rows = self._get_rows(row_clusters,row_cluster)
+        cols = self._get_cols(col_clusters,col_cluster)
 
         return rows,cols
 
