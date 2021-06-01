@@ -9,7 +9,6 @@ from sklearn.cluster import KMeans
 from joblib import Parallel, delayed, Memory
 from copy import deepcopy
 from ._scoal import SCOAL
-from ._evoscoal_operators import *
 
 class EvoSCOAL(SCOAL):
     
