@@ -4,7 +4,7 @@ from sklearn.base import is_regressor
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 from scipy.stats import norm
-from scipy.spatial import KDTree
+from sklearn.neighbors import NearestCentroid
 from sklearn.cluster import KMeans
 from joblib import Parallel, delayed, Memory
 from copy import deepcopy
@@ -436,10 +436,6 @@ class EvoSCOAL(SCOAL):
             valid_data = (valid_matrix,row_features,col_features)
             train_data = (train_matrix,row_features,col_features)
         
-        if self.mutation=='distance':
-            self.row_kdtree = KDTree(row_features)
-            self.col_kdtree = KDTree(col_features)
-
         if self.cache:
             self.memory = Memory('./pyscoal-cache')
             self._cached_fit = self.memory.cache(self._cached_fit, ignore=['self','model','X','y'])
@@ -728,13 +724,12 @@ class EvoSCOAL(SCOAL):
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
         rows = self._get_rows(row_clusters,row_cluster)
         new_row_clusters = row_clusters
-        for row in rows:
-            knn = 2
-            nn = self.row_kdtree.query(row_features[row],k=knn,p=2)[1][-1]
-            while nn in rows:
-                knn+=1
-                nn = self.row_kdtree.query(row_features[row],k=knn,p=2)[1][-1]
-            new_row_clusters[row] = new_row_clusters[nn]
+        if n_row_clusters > 2 :
+            nearest_centroid = NearestCentroid()
+            nearest_centroid.fit(np.delete(row_features,rows,axis=0),np.delete(row_clusters,rows,axis=0))
+            new_row_clusters[rows] = nearest_centroid.predict(row_features[rows])
+        else:
+            new_row_clusters[rows] = row_cluster*-1+1
         new_row_clusters[new_row_clusters>row_cluster] -= 1
 
         return new_row_clusters, models
@@ -744,14 +739,13 @@ class EvoSCOAL(SCOAL):
         row_clusters,col_clusters = coclusters
         n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
         cols = self._get_cols(col_clusters,col_cluster)
-        new_col_clusters = col_clusters   
-        for col in cols:
-            knn = 2
-            nn = self.col_kdtree.query(col_features[col],k=knn,p=2)[1][-1]
-            while nn in cols:
-                knn+=1
-                nn = self.col_kdtree.query(col_features[col],k=knn,p=2)[1][-1]
-            new_col_clusters[col] = new_col_clusters[nn]
+        new_col_clusters = col_clusters 
+        if n_col_clusters > 2 :  
+            nearest_centroid = NearestCentroid()
+            nearest_centroid.fit(np.delete(col_features,cols,axis=0),np.delete(col_clusters,cols,axis=0))
+            new_col_clusters[cols] = nearest_centroid.predict(col_features[cols])
+        else:
+            new_col_clusters[cols] = col_cluster*-1+1
         new_col_clusters[new_col_clusters>col_cluster] -= 1
 
         return new_col_clusters, models
