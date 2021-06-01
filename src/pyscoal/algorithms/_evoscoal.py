@@ -4,6 +4,8 @@ from sklearn.base import is_regressor
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 from scipy.stats import norm
+from scipy.spatial import KDTree
+from sklearn.cluster import KMeans
 from joblib import Parallel, delayed, Memory
 from copy import deepcopy
 from ._scoal import SCOAL
@@ -20,6 +22,7 @@ class EvoSCOAL(SCOAL):
                 tol=0.01,
                 estimator=LinearRegression(),
                 validation_size=0.2,
+                mutation='heuristic',
                 mutation_strength='max',
                 fitness_function = 'SSE',
                 random_state=42,
@@ -36,6 +39,8 @@ class EvoSCOAL(SCOAL):
         self.tol = tol
         self.estimator=estimator
         self.validation_size=validation_size
+        self.mutation=mutation
+        self.mutation_strength = max_row_clusters*max_col_clusters if mutation_strength == 'max' else mutation_strength
         self.fitness_function = fitness_function
         self.random_state=random_state
         self.n_jobs=n_jobs
@@ -43,7 +48,6 @@ class EvoSCOAL(SCOAL):
         self.verbose=verbose
         self.matrix=matrix
         self.is_regressor = is_regressor(estimator)
-        self.mutation_strength = max_row_clusters*max_col_clusters if mutation_strength == 'max' else mutation_strength
 
 
     def _baesian_information_criterion(self,data,coclusters,models,n_jobs):
@@ -202,17 +206,17 @@ class EvoSCOAL(SCOAL):
                     row_cluster=row_cluster_labels[choice]
                     split = np.random.random() > (np.unique(row_clusters).size-1)/(self.max_row_clusters-1)
                     if split :
-                        row_clusters=self._split_row_cluster(train_data,(row_clusters,col_clusters),row_cluster)
+                        row_clusters,models=self._split_row_cluster(train_data,(row_clusters,col_clusters),models,row_cluster)
                     else:
-                        row_clusters=self._delete_row_cluster(train_data,(row_clusters,col_clusters),row_cluster)
+                        row_clusters,models=self._delete_row_cluster(train_data,(row_clusters,col_clusters),models,row_cluster)
                         row_cluster_labels[row_cluster_labels>row_cluster] -= 1
                 elif choice >= self.max_row_clusters and self.max_col_clusters > 1:
                     col_cluster=col_cluster_labels[choice-self.max_row_clusters]
                     split = np.random.random() > (np.unique(col_clusters).size-1)/(self.max_col_clusters-1)
                     if split:
-                        col_clusters=self._split_col_cluster(train_data,(row_clusters,col_clusters),col_cluster)
+                        col_clusters,models=self._split_col_cluster(train_data,(row_clusters,col_clusters),models,col_cluster)
                     else:
-                        col_clusters=self._delete_col_cluster(train_data,(row_clusters,col_clusters),col_cluster)
+                        col_clusters,models=self._delete_col_cluster(train_data,(row_clusters,col_clusters),models,col_cluster)
                         col_cluster_labels[col_cluster_labels>col_cluster] -= 1
                 else:
                     continue
@@ -221,15 +225,53 @@ class EvoSCOAL(SCOAL):
 
         return individual
 
-    # def _split_row_cluster(self,train_data,coclusters,row_cluster):
-    #     if self.mutation == 'knn':
-    #         return _split_row_cluster_knn(self,train_data,coclusters,row_cluster)
-    #     elif self.mutaiton == 'heuristic':
-    #         return _split_row_cluster_heuristic(self,train_data,coclusters,row_cluster)
-    #     elif self.mutaiton == 'scoal':
-    #         return _split_row_cluster_scoal(self,train_data,coclusters,row_cluster)
-    #     else:
-    #         return _split_row_cluster_random(self,train_data,coclusters,row_cluster)
+    def _split_row_cluster(self,train_data,coclusters,models,row_cluster):
+        row_clusters, col_clusters = coclusters
+        rows=self._get_rows(row_clusters,row_cluster)
+        if rows.size <2:
+             return row_clusters, models
+        if self.mutation == 'heuristic':
+            return self._split_row_cluster_heuristic(train_data,coclusters,models,row_cluster)
+        elif self.mutation == 'scoal':
+            return self._split_row_cluster_scoal(train_data,coclusters,models,row_cluster)
+        elif self.mutation == 'distance':
+            return self._split_row_cluster_distance(train_data,coclusters,models,row_cluster)
+        else:
+            return self._split_row_cluster_random(train_data,coclusters,models,row_cluster)
+
+    def _split_col_cluster(self,train_data,coclusters,models,col_cluster):
+        row_clusters, col_clusters = coclusters
+        rows=self._get_cols(col_clusters,col_cluster)
+        if rows.size <2:
+             return row_clusters, models
+        if self.mutation == 'heuristic':
+            return self._split_col_cluster_heuristic(train_data,coclusters,models,col_cluster)
+        elif self.mutation == 'scoal':
+            return self._split_col_cluster_scoal(train_data,coclusters,models,col_cluster)
+        elif self.mutation == 'distance':
+            return self._split_col_cluster_distance(train_data,coclusters,models,col_cluster)
+        else:
+            return self._split_col_cluster_random(train_data,coclusters,models,col_cluster)
+
+    def _delete_row_cluster(self,train_data,coclusters,models,row_cluster):
+            if self.mutation == 'heuristic':
+                return self._delete_row_cluster_heuristic(train_data,coclusters,models,row_cluster)
+            elif self.mutation == 'scoal':
+                return self._delete_row_cluster_scoal(train_data,coclusters,models,row_cluster)
+            elif self.mutation == 'distance':
+               return self._delete_row_cluster_distance(train_data,coclusters,models,row_cluster)
+            else:
+                return self._delete_row_cluster_random(train_data,coclusters,models,row_cluster)
+
+    def _delete_col_cluster(self,train_data,coclusters,models,col_cluster):
+            if self.mutation == 'heuristic':
+                return self._delete_col_cluster_heuristic(train_data,coclusters,models,col_cluster)
+            elif self.mutation == 'scoal':
+                return self._delete_col_cluster_scoal(train_data,coclusters,models,col_cluster)
+            elif self.mutation == 'distance':
+                return self._delete_col_cluster_distance(train_data,coclusters,models,col_cluster)
+            else:
+                return self._delete_col_cluster_random(train_data,coclusters,models,col_cluster)
 
 
     def _best_selection(self,population1,fitness1,scores1,population2,fitness2,scores2):
@@ -395,6 +437,9 @@ class EvoSCOAL(SCOAL):
             valid_data = (valid_matrix,row_features,col_features)
             train_data = (train_matrix,row_features,col_features)
         
+        if self.mutation=='distance':
+            self.row_kdtree = KDTree(row_features)
+            self.col_kdtree = KDTree(col_features)
 
         if self.cache:
             self.memory = Memory('./pyscoal-cache')
@@ -414,7 +459,7 @@ class EvoSCOAL(SCOAL):
     #
     ##############################
 
-    def _split_row_cluster(self,train_data,coclusters,row_cluster):
+    def _split_row_cluster_heuristic(self,train_data,coclusters,models,row_cluster):
         matrix, _, _ = train_data
         if self.matrix=='dense':
             mask = np.invert(np.isnan(matrix))
@@ -443,9 +488,9 @@ class EvoSCOAL(SCOAL):
             new_row_clusters[row] = new_row_cluster
         new_row_clusters = new_row_clusters.astype(int)
 
-        return new_row_clusters
+        return new_row_clusters, models
 
-    def _split_col_cluster(self,train_data,coclusters,col_cluster):
+    def _split_col_cluster_heuristic(self,train_data,coclusters,models,col_cluster):
         matrix, _, _ = train_data
         if self.matrix=='dense':
             mask = np.invert(np.isnan(matrix))
@@ -474,9 +519,9 @@ class EvoSCOAL(SCOAL):
             new_col_clusters[col] = new_col_cluster
         new_col_clusters = new_col_clusters.astype(int)
 
-        return new_col_clusters
+        return new_col_clusters, models
 
-    def _delete_row_cluster(self,train_data,coclusters,row_cluster):
+    def _delete_row_cluster_heuristic(self,train_data,coclusters,models,row_cluster):
         matrix, _, _ = train_data
         if self.matrix=='dense':
             mask = np.invert(np.isnan(matrix))
@@ -506,9 +551,9 @@ class EvoSCOAL(SCOAL):
             new_row_clusters[row] = new_row_cluster
         new_row_clusters = new_row_clusters.astype(int)
 
-        return new_row_clusters
+        return new_row_clusters, models
 
-    def _delete_col_cluster(self,train_data,coclusters,col_cluster):
+    def _delete_col_cluster_heuristic(self,train_data,coclusters,models,col_cluster):
         matrix, _, _ = train_data
         if self.matrix=='dense':
             mask = np.invert(np.isnan(matrix))
@@ -538,7 +583,7 @@ class EvoSCOAL(SCOAL):
             new_col_clusters[col] = new_col_cluster      
         new_col_clusters = new_col_clusters.astype(int)  
 
-        return new_col_clusters
+        return new_col_clusters, models
 
     ##############################
     #
@@ -546,120 +591,214 @@ class EvoSCOAL(SCOAL):
     #
     ##############################
 
-    def _split_row_cluster_heurusitc(self,train_data,coclusters,row_cluster):
-        matrix, _, _ = train_data
-        if self.matrix=='dense':
-            mask = np.invert(np.isnan(matrix))
-        else:
-            rows, cols, values = matrix[:,0].astype(int), matrix[:,1].astype(int), matrix[:,2]
-            mask = np.zeros((self.n_rows, self.n_cols))
-            mask[rows,cols] = values
-            mask = np.invert(np.isnan(mask))
-        row_clusters,col_clusters = coclusters
-        n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
-        n_rows, n_cols = mask.shape
-        new_row_clusters = np.zeros(n_rows)*np.nan
-        col_clusters_aux = np.zeros((n_col_clusters,n_rows))
-        row_clusters_aux = np.zeros((n_row_clusters+1,n_col_clusters))
-        for col in np.random.choice(np.arange(n_cols),n_cols,replace=False):
-                col_cluster = col_clusters[col]
-                col_clusters_aux[col_cluster]=np.logical_or(col_clusters_aux[col_cluster],mask[:,col])
-        for row in np.random.choice(np.arange(n_rows),n_rows,replace=False):
-            if row_clusters[row]==row_cluster:
-                fills = (col_clusters_aux[:,row]>row_clusters_aux[[row_cluster,n_row_clusters],:]).sum(axis=1)
-                new_row_cluster = np.random.choice(np.where(fills == fills.max())[0])
-                new_row_cluster = row_cluster if new_row_cluster == 0 else n_row_clusters
-            else:
-                new_row_cluster=row_clusters[row]
-            row_clusters_aux[new_row_cluster]=np.logical_or(row_clusters_aux[new_row_cluster],col_clusters_aux[:,row])
-            new_row_clusters[row] = new_row_cluster
-        new_row_clusters = new_row_clusters.astype(int)
-
+    def _split_row_cluster_scoal(self,train_data,coclusters,models,row_cluster):
         row_clusters, col_clusters = coclusters
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
-        models = self._initialize_models(coclusters)
-        results = self._compute_clusterwise(train_data,coclusters,models,self._score_rows,n_jobs)
-        scores = np.zeros((row_clusters.size,n_row_clusters))
-        for i in range(n_row_clusters):
-            for j in range(n_col_clusters):
-                scores[:,i] += results[i][j] 
-        cluster_to_split = scores.mean(axis=0).argmax()
-        rows = np.where(row_clusters==cluster_to_split)[0]
-        rows_scores = scores[row_clusters==cluster_to_split,cluster_to_split]
-        rows = rows[np.argsort(rows)]
-        rows_scores = np.sort(rows_scores)
-        rows1 = np.array_split(rows[rows_scores==0],2)[1]
-        rows2 = np.array_split(rows[rows_scores>0],2)[1]
+        rows = self._get_rows(row_clusters,row_cluster)
+        scores = np.zeros(rows.size)
+        for i,row in enumerate(rows):
+            for col_cluster in range(n_col_clusters):            
+                cols = self._get_cols(col_clusters,col_cluster)
+                model = models[row_cluster][col_cluster] 
+                X, y = self._get_X_y(train_data,[row],cols)
+                if y.size > 0:
+                    y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
+                    scores[i] += self._scoring(y,y_pred)
+        scores = np.sort(scores)
+        rows1 = np.array_split(rows[scores==0],2)[1]
+        rows2 = np.array_split(rows[scores>0],2)[1]
         rows = np.concatenate((rows1,rows2))
         new_row_clusters = row_clusters
         new_row_clusters[rows] = n_row_clusters
 
-        return new_row_clusters, col_clusters
+        if self.mutation_strength > 1: 
+            models = self._initialize_models((new_row_clusters,col_clusters))
+            models, _ = self._update_models(train_data,(new_row_clusters,col_clusters),models,1)
 
-        return new_row_clusters
+        return new_row_clusters, models
+  
+    def _split_col_cluster_scoal(self,train_data,coclusters,models,col_cluster):
+        row_clusters, col_clusters = coclusters
+        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
+        cols = self._get_cols(col_clusters,col_cluster)
+        scores = np.zeros(cols.size)
+        for i,col in enumerate(cols):
+            for row_cluster in range(n_row_clusters):            
+                rows = self._get_rows(row_clusters,row_cluster)
+                model = models[row_cluster][col_cluster] 
+                X, y = self._get_X_y(train_data,rows,[col])
+                if y.size > 0:
+                    y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
+                    scores[i] += self._scoring(y,y_pred)
+        scores = np.sort(scores)
+        cols1 = np.array_split(cols[scores==0],2)[1]
+        cols2 = np.array_split(cols[scores>0],2)[1]
+        cols = np.concatenate((cols1,cols2))
+        new_col_clusters = col_clusters
+        new_col_clusters[cols] = n_col_clusters
 
-    def _split_col_cluster_heurusitc(self,train_data,coclusters,col_cluster):
-        matrix, _, _ = train_data
-        if self.matrix=='dense':
-            mask = np.invert(np.isnan(matrix))
-        else:
-            rows, cols, values = matrix[:,0].astype(int), matrix[:,1].astype(int), matrix[:,2]
-            mask = np.zeros((self.n_rows, self.n_cols))
-            mask[rows,cols] = values
-            mask = np.invert(np.isnan(mask))
+        if self.mutation_strength > 1: 
+            models = self._initialize_models((row_clusters,new_col_clusters))
+            models, _ = self._update_models(train_data,(row_clusters,new_col_clusters),models,1)
+
+        return new_col_clusters, models
+
+    def _delete_row_cluster_scoal(self,train_data,coclusters,models,row_cluster):
         row_clusters,col_clusters = coclusters
         n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
-        n_rows, n_cols = mask.shape
-        new_col_clusters = np.zeros(n_cols)*np.nan
-        row_clusters_aux = np.zeros((n_row_clusters,n_cols))
-        col_clusters_aux = np.zeros((n_col_clusters+1,n_row_clusters))
-        for row in np.random.choice(np.arange(n_rows),n_rows,replace=False):
-            row_cluster = row_clusters[row]
-            row_clusters_aux[row_cluster]=np.logical_or(row_clusters_aux[row_cluster],mask[row,:])
-        for col in np.random.choice(np.arange(n_cols),n_cols,replace=False):        
-            if col_clusters[col]==col_cluster:
-                fills = (row_clusters_aux[:,col]>col_clusters_aux[[col_cluster,n_col_clusters],:]).sum(axis=1)
-                new_col_cluster = np.random.choice(np.where(fills == fills.max())[0])
-                new_col_cluster = col_cluster if new_col_cluster == 0 else n_col_clusters
-            else:
-                new_col_cluster=col_clusters[col]
-            col_clusters_aux[new_col_cluster]=np.logical_or(col_clusters_aux[new_col_cluster],row_clusters_aux[:,col])
-            new_col_clusters[col] = new_col_cluster
-        new_col_clusters = new_col_clusters.astype(int)
-
-        return new_col_clusters
-
-    def _delete_row_cluster_heurusitc(self,train_data,coclusters,row_cluster):
-        matrix, _, _ = train_data
-        if self.matrix=='dense':
-            mask = np.invert(np.isnan(matrix))
-        else:
-            rows, cols, values = matrix[:,0].astype(int), matrix[:,1].astype(int), matrix[:,2]
-            mask = np.zeros((self.n_rows, self.n_cols))
-            mask[rows,cols] = values
-            mask = np.invert(np.isnan(mask))
-        row_clusters,col_clusters = coclusters
-        n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
-        n_rows, n_cols = mask.shape
-        new_row_clusters = np.zeros(n_rows)*np.nan
-        col_clusters_aux = np.zeros((n_col_clusters,n_rows))
-        row_clusters_aux = np.zeros((n_row_clusters-1,n_col_clusters))
+        rows = self._get_rows(row_clusters,row_cluster)
+        scores = np.zeros((rows.size,n_row_clusters-1))
         row_clusters[row_clusters==row_cluster] = -1
         row_clusters[row_clusters>row_cluster] -= 1
-        for col in np.random.choice(np.arange(n_cols),n_cols,replace=False):
-            col_cluster = col_clusters[col]
-            col_clusters_aux[col_cluster]=np.logical_or(col_clusters_aux[col_cluster],mask[:,col])  
-        for row in np.random.choice(np.arange(n_rows),n_rows,replace=False):
-            if row_clusters[row]==-1:
-                fills = (col_clusters_aux[:,row]>row_clusters_aux).sum(axis=1)
-                new_row_cluster = np.random.choice(np.where(fills == fills.max())[0])
-            else:
-                new_row_cluster=row_clusters[row]
-            row_clusters_aux[new_row_cluster]=np.logical_or(row_clusters_aux[new_row_cluster],col_clusters_aux[:,row])
-            new_row_clusters[row] = new_row_cluster
-        new_row_clusters = new_row_clusters.astype(int)
+        for i in range(n_row_clusters-1):
+            for j in range(n_col_clusters):
+                if i != -1:
+                    cols = self._get_cols(col_clusters,j)
+                    model = models[i][j] 
+                    X, y = self._get_X_y(train_data,rows,cols)
+                    if y.size > 0:
+                        y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
+                        scores[:,i] += self._scoring(y,y_pred)
+        new_row_clusters = row_clusters
+        new_row_clusters[rows] = np.argmin(scores,axis=1) 
 
-        return new_row_clusters
+        if self.mutation_strength > 1: 
+            models = self._initialize_models((new_row_clusters,col_clusters))
+            models, _ = self._update_models(train_data,(new_row_clusters,col_clusters),models,1)       
+
+        return new_row_clusters, models
+
+    def _delete_col_cluster_scoal(self,train_data,coclusters,models,col_cluster):
+        row_clusters,col_clusters = coclusters
+        n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
+        cols = self._get_cols(col_clusters,col_cluster)
+        scores = np.zeros((cols.size,n_col_clusters-1))
+        col_clusters[col_clusters==col_cluster] = -1
+        col_clusters[col_clusters>col_cluster] -= 1
+        for i in range(n_row_clusters):
+            for j in range(n_col_clusters-1):
+                if j != -1:
+                    rows = self._get_rows(row_clusters,i)
+                    model = models[i][j] 
+                    X, y = self._get_X_y(train_data,rows,cols)
+                    if y.size > 0:
+                        y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
+                        scores[:,j] += self._scoring(y,y_pred)
+        new_col_clusters = col_clusters
+        new_col_clusters[cols] = np.argmin(scores,axis=1)  
+
+        if self.mutation_strength > 1: 
+            models = self._initialize_models((row_clusters,new_col_clusters))
+            models, _ = self._update_models(train_data,(row_clusters,new_col_clusters),models,1)      
+
+        return new_col_clusters, models
+    
+    ##############################
+    #
+    # Distance Split and Delete
+    #
+    ##############################
+
+    def _split_row_cluster_distance(self,train_data,coclusters,models,row_cluster):
+        _, row_features, _ = train_data
+        row_clusters, col_clusters = coclusters
+        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
+        rows = self._get_rows(row_clusters,row_cluster)
+        kmeans = KMeans(n_clusters=2)
+        kmeans.fit(row_features[rows])
+        new_row_clusters = row_clusters
+        new_row_clusters[rows] = np.array([row_cluster,n_row_clusters])[kmeans.labels_]
+
+        return new_row_clusters, models
+
+    def _split_col_cluster_distance(self,train_data,coclusters,models,col_cluster):
+        _, _, col_features = train_data
+        row_clusters, col_clusters = coclusters
+        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
+        cols = self._get_cols(col_clusters,col_cluster)
+        kmeans = KMeans(n_clusters=2)
+        kmeans.fit(col_features[cols])
+        new_col_clusters = col_clusters
+        new_col_clusters[cols] = np.array([col_cluster,n_col_clusters])[kmeans.labels_]
+
+        return new_col_clusters, models
+
+    def _delete_row_cluster_distance(self,train_data,coclusters,models,row_cluster):
+        _, row_features, _ = train_data
+        row_clusters, col_clusters = coclusters
+        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
+        rows = self._get_rows(row_clusters,row_cluster)
+        new_row_clusters = row_clusters
+        for row in rows:
+            knn = 2
+            nn = self.row_kdtree.query(row_features[row],k=knn,p=2)[1][-1]
+            while nn in rows:
+                knn+=1
+                nn = self.row_kdtree.query(row_features[row],k=knn,p=2)[1][-1]
+            new_row_clusters[row] = new_row_clusters[nn]
+        new_row_clusters[new_row_clusters>row_cluster] -= 1
+
+        return new_row_clusters, models
+
+    def _delete_col_cluster_distance(self,train_data,coclusters,models,col_cluster):
+        _, _, col_features = train_data
+        row_clusters,col_clusters = coclusters
+        n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
+        cols = self._get_cols(col_clusters,col_cluster)
+        new_col_clusters = col_clusters   
+        for col in cols:
+            knn = 2
+            nn = self.col_kdtree.query(col_features[col],k=knn,p=2)[1][-1]
+            while nn in cols:
+                knn+=1
+                nn = self.col_kdtree.query(col_features[col],k=knn,p=2)[1][-1]
+            new_col_clusters[col] = new_col_clusters[nn]
+        new_col_clusters[new_col_clusters>col_cluster] -= 1
+
+        return new_col_clusters, models
+    
+
+    #############################
+    #
+    # Random Split and Delete
+    #
+    ##############################
+
+    def _split_row_cluster_random(self,train_data,coclusters,models,row_cluster):
+        row_clusters, col_clusters = coclusters
+        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
+        new_row_clusters = row_clusters
+        new_row_clusters[new_row_clusters==row_cluster] = np.random.choice([row_cluster,n_row_clusters],new_row_clusters[new_row_clusters==row_cluster].size)
+
+        return new_row_clusters, models
+  
+    def _split_col_cluster_random(self,train_data,coclusters,models,col_cluster):
+        row_clusters, col_clusters = coclusters
+        n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
+        new_col_clusters = col_clusters
+        new_col_clusters[new_col_clusters==col_cluster] = np.random.choice([col_cluster,n_col_clusters],new_col_clusters[new_col_clusters==col_cluster].size)
+
+        return new_col_clusters, models
+
+    def _delete_row_cluster_random(self,train_data,coclusters,models,row_cluster):
+        row_clusters,col_clusters = coclusters
+        n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
+        new_row_clusters = row_clusters
+        new_row_clusters[new_row_clusters==row_cluster] = -1
+        new_row_clusters[new_row_clusters>row_cluster] -= 1
+        new_row_clusters[new_row_clusters==-1]  = np.random.choice(np.arange(n_row_clusters-1),new_row_clusters[new_row_clusters==-1].size)
+
+        return new_row_clusters, models
+
+    def _delete_col_cluster_random(self,train_data,coclusters,models,col_cluster):
+        row_clusters,col_clusters = coclusters
+        n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
+        new_col_clusters = col_clusters
+        new_col_clusters[new_col_clusters==col_cluster] = -1
+        new_col_clusters[new_col_clusters>col_cluster] -= 1
+        new_col_clusters[new_col_clusters==-1]  = np.random.choice(np.arange(n_col_clusters-1),new_col_clusters[new_col_clusters==-1].size)
+
+        return new_col_clusters, models
 
 
 
