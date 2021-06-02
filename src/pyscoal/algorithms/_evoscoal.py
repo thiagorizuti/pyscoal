@@ -2,7 +2,6 @@ import numpy as np
 import time
 from sklearn.base import is_regressor
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error
 from scipy.stats import norm
 from sklearn.neighbors import NearestCentroid
 from sklearn.cluster import KMeans
@@ -53,8 +52,9 @@ class EvoSCOAL(SCOAL):
         log_likelihood = self._compute_clusterwise(data,coclusters,models,self._log_likelihood,n_jobs)
         row_clusters, col_clusters = coclusters
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
-        n_params = self.n_rows + self.n_cols + (n_row_clusters*n_col_clusters)*(self.n_row_features+self.n_col_features)
-        bic = n_params*np.log(self.n_values) - 2*np.sum(log_likelihood)
+        k = self.n_rows + self.n_cols + (n_row_clusters*n_col_clusters)*(self.n_row_features+self.n_col_features)
+        n = self.n_values
+        bic = k*np.log(n) - 2*np.sum(log_likelihood)
         
 
         return bic
@@ -66,7 +66,12 @@ class EvoSCOAL(SCOAL):
         log_likelihood = 0
         if y.size > 0:
             y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
-            log_likelihood = np.nansum(norm.logpdf(y,scale=y_pred,loc=mean_squared_error(y,y_pred)))
+            n = y.size
+            sse = np.sum((y - y_pred)**2)
+            log_likelihood = np.sum(norm.logpdf(y,loc=y_pred,scale=np.sqrt(sse/n)))
+            #log_likelihood = -np.log(sse/n)*(n/2) - (1+np.log(2*np.pi))*(n/2)
+            #log_likelihood = -np.log(sse) * (n/2) - (1+np.log(np.pi/(n/2)))*(n/2)
+
 
         return log_likelihood 
         
