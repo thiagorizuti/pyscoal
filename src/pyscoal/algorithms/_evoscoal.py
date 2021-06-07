@@ -38,7 +38,7 @@ class EvoSCOAL(SCOAL):
         self.estimator=estimator
         self.validation_size=validation_size
         self.mutation=mutation
-        self.mutation_strength = max_row_clusters*max_col_clusters if mutation_strength == 'max' else mutation_strength
+        self.mutation_strength = np.inf if mutation_strength == 'max' else mutation_strength
         self.fitness_function = fitness_function
         self.random_state=random_state
         self.n_jobs=n_jobs
@@ -195,45 +195,60 @@ class EvoSCOAL(SCOAL):
             coclusters, models = individual
             row_clusters,col_clusters = coclusters
             n_row_clusters, n_col_clusters = np.unique(row_clusters).size, np.unique(col_clusters).size
-            probs = np.concatenate((np.nansum(scores[0],axis=1),np.nansum(scores[0],axis=0)),axis=0)
-            n_values = np.concatenate((np.nansum(scores[1],axis=1),np.nansum(scores[1],axis=0)),axis=0)
+            if self.max_row_clusters == 1 and self.max_col_clusters == 1:
+                return individual
+            elif self.max_row_clusters == 1:
+                axis = 1
+            elif self.max_col_clusters == 1:
+                axis  = 0
+            else: 
+                axis = int(np.random.random() > 0.5)
+            max_clusters = self.max_row_clusters if axis==0 else self.max_col_clusters
+            n_clusters = n_row_clusters if axis==0 else n_col_clusters
+            split = np.random.random() > (n_clusters-1)/(max_clusters-1)
+            if split:
+                many_clusters = np.random.randint(1,np.minimum(self.mutation_strength+1,np.minimum(max_clusters-n_clusters,n_clusters)+1))
+            else:
+                many_clusters = np.random.randint(1,np.minimum(self.mutation_strength+1,n_clusters))
+            probs = np.nansum(scores[0],axis=-1*axis+1)
+            n_values = np.nansum(scores[1],axis=-1*axis+1)
             np.divide(probs,n_values, where=n_values!=0,out=probs)
-            probs = np.argsort(np.argsort(probs)) - np.sum(probs==0)
+            probs = np.argsort(np.argsort(probs)) - np.sum(probs==0)+1
             probs = np.maximum(probs,0)
-            probs = probs/probs.sum()
-            many_clusters = 1 if self.mutation_strength == 1 else np.random.randint(1,np.minimum(self.mutation_strength,n_row_clusters+n_col_clusters)) 
+            probs = probs/probs.sum()  
             choices = np.random.choice(np.arange(probs.size),many_clusters,replace=False,p=probs)
-            row_cluster_labels = np.arange(n_row_clusters)
-            col_cluster_labels = np.arange(n_col_clusters)
-            for choice in choices:  
-                if choice < self.max_row_clusters and self.max_row_clusters > 1:
-                    row_cluster=row_cluster_labels[choice]
-                    split = np.random.random() > (np.unique(row_clusters).size-1)/(self.max_row_clusters-1)
-                    if split :
-                        row_clusters,models=self._split_row_cluster(train_data,(row_clusters,col_clusters),models,row_cluster)
-                    else:
-                        row_clusters,models=self._delete_row_cluster(train_data,(row_clusters,col_clusters),models,row_cluster)
-                        row_cluster_labels[row_cluster_labels>row_cluster] -= 1
-                elif choice >= self.max_row_clusters and self.max_col_clusters > 1:
-                    col_cluster=col_cluster_labels[choice-self.max_row_clusters]
-                    split = np.random.random() > (np.unique(col_clusters).size-1)/(self.max_col_clusters-1)
-                    if split:
-                        col_clusters,models=self._split_col_cluster(train_data,(row_clusters,col_clusters),models,col_cluster)
-                    else:
-                        col_clusters,models=self._delete_col_cluster(train_data,(row_clusters,col_clusters),models,col_cluster)
-                        col_cluster_labels[col_cluster_labels>col_cluster] -= 1
-                else:
-                    continue
-                coclusters = row_clusters,col_clusters
-                individual = (coclusters,models)
+            if split:
+                for cluster in choices:
+                    coclusters,models=self._split_cluster(train_data,coclusters,models,cluster,axis)
+            else:
+                labels = np.arange(n_clusters)
+                for cluster in choices:
+                    label = labels[cluster]
+                    labels[cluster] = -1
+                    labels[labels>label]-=1
+                    coclusters,models=self._delete_cluster(train_data,coclusters,models,label,axis)
+                          
+            individual = (coclusters,models)
 
         return individual
+    
+    def _split_cluster(self,train_data,coclusters,models,cluster,axis):
+        if axis==0:
+            return self._split_row_cluster(train_data,coclusters,models,cluster)
+        else:
+            return self._split_col_cluster(train_data,coclusters,models,cluster)
+    
+    def _delete_cluster(self,train_data,coclusters,models,cluster,axis):
+        if axis==0:
+            return self._delete_row_cluster(train_data,coclusters,models,cluster)
+        else:
+            return self._delete_col_cluster(train_data,coclusters,models,cluster)
 
     def _split_row_cluster(self,train_data,coclusters,models,row_cluster):
-        row_clusters, col_clusters = coclusters
+        row_clusters, _ = coclusters
         rows=self._get_rows(row_clusters,row_cluster)
         if rows.size <2:
-             return row_clusters, models
+             return coclusters, models
         if self.mutation == 'heuristic':
             return self._split_row_cluster_heuristic(train_data,coclusters,models,row_cluster)
         elif self.mutation == 'scoal':
@@ -244,10 +259,10 @@ class EvoSCOAL(SCOAL):
             return self._split_row_cluster_random(train_data,coclusters,models,row_cluster)
 
     def _split_col_cluster(self,train_data,coclusters,models,col_cluster):
-        row_clusters, col_clusters = coclusters
-        rows=self._get_cols(col_clusters,col_cluster)
-        if rows.size <2:
-             return row_clusters, models
+        _, col_clusters = coclusters
+        cols=self._get_cols(col_clusters,col_cluster)
+        if cols.size <2:
+             return coclusters, models
         if self.mutation == 'heuristic':
             return self._split_col_cluster_heuristic(train_data,coclusters,models,col_cluster)
         elif self.mutation == 'scoal':
@@ -304,7 +319,7 @@ class EvoSCOAL(SCOAL):
         if elitism:
             best = np.nanargmax(probs)
             probs[best] = 0.
-        probs = np.argsort(np.argsort(probs)) - np.sum(probs==0)
+        probs = np.argsort(np.argsort(probs)) - np.sum(probs==0)+1
         probs = np.maximum(probs,0)
         probs = probs/probs.sum()
         selection = np.random.choice(np.arange(probs.size),self.pop_size-1,replace=False,p=probs)
@@ -325,6 +340,7 @@ class EvoSCOAL(SCOAL):
 
 
     def _print_status(self,gen_count,delta_fitness,population,fitness,rate,infeasible,elapsed_time):
+        best_ind = np.nanargmin(fitness)
         best = np.nanmin(fitness)
         worst = np.nanmax(fitness)
         mean = np.nanmean(fitness)
@@ -332,11 +348,12 @@ class EvoSCOAL(SCOAL):
         max_size = sizes.max()
         min_size = sizes.min()
         mean_size = sizes.mean()
+        best_size = sizes[best_ind]
         if gen_count==0:
-            print('|'.join(x.ljust(11) for x in [
-                    'generation','delta fitness (%)','best fitness','worst fitness','mean fitness','max size','min size','mean size','survival rate','infeasible','elapsed time (s)']))
+            print('|'.join(x.ljust(13) for x in [
+                    'generation','delta fit.(%)','best fit.','worst fit.','mean fit.','best size','max size','min size','mean size','survival rate','infeasible',' time(s)']))
 
-        print('|'.join(x.ljust(11) for x in ['%i' % gen_count,'%.4f' % delta_fitness,'%.4f' % best,'%.4f' % worst,'%.4f'  % mean,'%i'  % max_size,'%i'  % min_size,'%.2f'  % mean_size, '%.4f' % rate ,'%i' % infeasible,'%i' % elapsed_time]))
+        print('|'.join(x.ljust(13) for x in ['%i' % gen_count,'%.4f' % delta_fitness,'%.4f' % best,'%.4f' % worst,'%.4f'  % mean,'%i'  % best_size,'%i'  % max_size,'%i'  % min_size,'%.2f'  % mean_size, '%.4f' % rate ,'%i' % infeasible,'%i' % elapsed_time]))
 
     def _converge_evoscoal(self,train_data,valid_data,population,max_gen=5,gen_tol=10,tol=0.01,n_jobs=(1,1),verbose=False):
         converged = False
@@ -487,8 +504,9 @@ class EvoSCOAL(SCOAL):
             row_clusters_aux[new_row_cluster]=np.logical_or(row_clusters_aux[new_row_cluster],col_clusters_aux[:,row])
             new_row_clusters[row] = new_row_cluster
         new_row_clusters = new_row_clusters.astype(int)
+        coclusters = (new_row_clusters,col_clusters)
 
-        return new_row_clusters, models
+        return coclusters, models
 
     def _split_col_cluster_heuristic(self,train_data,coclusters,models,col_cluster):
         matrix, _, _ = train_data
@@ -518,8 +536,9 @@ class EvoSCOAL(SCOAL):
             col_clusters_aux[new_col_cluster]=np.logical_or(col_clusters_aux[new_col_cluster],row_clusters_aux[:,col])
             new_col_clusters[col] = new_col_cluster
         new_col_clusters = new_col_clusters.astype(int)
+        coclusters = (row_clusters,new_col_clusters)
 
-        return new_col_clusters, models
+        return coclusters, models
 
     def _delete_row_cluster_heuristic(self,train_data,coclusters,models,row_cluster):
         matrix, _, _ = train_data
@@ -550,8 +569,9 @@ class EvoSCOAL(SCOAL):
             row_clusters_aux[new_row_cluster]=np.logical_or(row_clusters_aux[new_row_cluster],col_clusters_aux[:,row])
             new_row_clusters[row] = new_row_cluster
         new_row_clusters = new_row_clusters.astype(int)
+        coclusters = (new_row_clusters,col_clusters)
 
-        return new_row_clusters, models
+        return coclusters, models
 
     def _delete_col_cluster_heuristic(self,train_data,coclusters,models,col_cluster):
         matrix, _, _ = train_data
@@ -582,8 +602,9 @@ class EvoSCOAL(SCOAL):
             col_clusters_aux[new_col_cluster]=np.logical_or(col_clusters_aux[new_col_cluster],row_clusters_aux[:,col])
             new_col_clusters[col] = new_col_cluster      
         new_col_clusters = new_col_clusters.astype(int)  
+        coclusters = (row_clusters,new_col_clusters)
 
-        return new_col_clusters, models
+        return coclusters, models
 
     ##############################
     #
@@ -611,11 +632,12 @@ class EvoSCOAL(SCOAL):
         new_row_clusters = row_clusters
         new_row_clusters[rows] = n_row_clusters
 
-        if self.mutation_strength > 1: 
-            models = self._initialize_models((new_row_clusters,col_clusters))
-            models, _ = self._update_models(train_data,(new_row_clusters,col_clusters),models,1)
+        # if self.mutation_strength > 1: 
+        #     models = self._initialize_models((new_row_clusters,col_clusters))
+        #     models, _ = self._update_models(train_data,(new_row_clusters,col_clusters),models,1)
+        coclusters = (new_row_clusters,col_clusters)
 
-        return new_row_clusters, models
+        return coclusters, models
   
     def _split_col_cluster_scoal(self,train_data,coclusters,models,col_cluster):
         row_clusters, col_clusters = coclusters
@@ -637,11 +659,12 @@ class EvoSCOAL(SCOAL):
         new_col_clusters = col_clusters
         new_col_clusters[cols] = n_col_clusters
 
-        if self.mutation_strength > 1: 
-            models = self._initialize_models((row_clusters,new_col_clusters))
-            models, _ = self._update_models(train_data,(row_clusters,new_col_clusters),models,1)
+        # if self.mutation_strength > 1: 
+        #     models = self._initialize_models((row_clusters,new_col_clusters))
+        #     models, _ = self._update_models(train_data,(row_clusters,new_col_clusters),models,1)
+        coclusters = (row_clusters,new_col_clusters)
 
-        return new_col_clusters, models
+        return coclusters, models
 
     def _delete_row_cluster_scoal(self,train_data,coclusters,models,row_cluster):
         row_clusters,col_clusters = coclusters
@@ -662,11 +685,13 @@ class EvoSCOAL(SCOAL):
         new_row_clusters = row_clusters
         new_row_clusters[rows] = np.argmin(scores,axis=1) 
 
-        if self.mutation_strength > 1: 
-            models = self._initialize_models((new_row_clusters,col_clusters))
-            models, _ = self._update_models(train_data,(new_row_clusters,col_clusters),models,1)       
+        if self.mutation_strength > 1:
+            del models[row_cluster]
+        #     models = self._initialize_models((new_row_clusters,col_clusters))
+        #     models, _ = self._update_models(train_data,(new_row_clusters,col_clusters),models,1)       
+        coclusters = (new_row_clusters,col_clusters)
 
-        return new_row_clusters, models
+        return coclusters, models
 
     def _delete_col_cluster_scoal(self,train_data,coclusters,models,col_cluster):
         row_clusters,col_clusters = coclusters
@@ -688,10 +713,13 @@ class EvoSCOAL(SCOAL):
         new_col_clusters[cols] = np.argmin(scores,axis=1)  
 
         if self.mutation_strength > 1: 
-            models = self._initialize_models((row_clusters,new_col_clusters))
-            models, _ = self._update_models(train_data,(row_clusters,new_col_clusters),models,1)      
+            for i in range(len(models)):
+                del models[i][col_cluster]
+        #     models = self._initialize_models((row_clusters,new_col_clusters))
+        #     models, _ = self._update_models(train_data,(row_clusters,new_col_clusters),models,1)      
+        coclusters = (row_clusters,new_col_clusters)
 
-        return new_col_clusters, models
+        return coclusters, models
     
     ##############################
     #
@@ -708,8 +736,9 @@ class EvoSCOAL(SCOAL):
         kmeans.fit(row_features[rows])
         new_row_clusters = row_clusters
         new_row_clusters[rows] = np.array([row_cluster,n_row_clusters])[kmeans.labels_]
+        coclusters = (new_row_clusters,col_clusters)
 
-        return new_row_clusters, models
+        return coclusters, models
 
     def _split_col_cluster_distance(self,train_data,coclusters,models,col_cluster):
         _, _, col_features = train_data
@@ -720,8 +749,9 @@ class EvoSCOAL(SCOAL):
         kmeans.fit(col_features[cols])
         new_col_clusters = col_clusters
         new_col_clusters[cols] = np.array([col_cluster,n_col_clusters])[kmeans.labels_]
+        coclusters = (row_clusters,new_col_clusters)
 
-        return new_col_clusters, models
+        return coclusters, models
 
     def _delete_row_cluster_distance(self,train_data,coclusters,models,row_cluster):
         _, row_features, _ = train_data
@@ -736,8 +766,9 @@ class EvoSCOAL(SCOAL):
         else:
             new_row_clusters[rows] = row_cluster*-1+1
         new_row_clusters[new_row_clusters>row_cluster] -= 1
+        coclusters = (new_row_clusters,col_clusters)
 
-        return new_row_clusters, models
+        return coclusters, models
 
     def _delete_col_cluster_distance(self,train_data,coclusters,models,col_cluster):
         _, _, col_features = train_data
@@ -752,8 +783,9 @@ class EvoSCOAL(SCOAL):
         else:
             new_col_clusters[cols] = col_cluster*-1+1
         new_col_clusters[new_col_clusters>col_cluster] -= 1
+        coclusters = (row_clusters,new_col_clusters)
 
-        return new_col_clusters, models
+        return coclusters, models
     
 
     #############################
@@ -767,16 +799,18 @@ class EvoSCOAL(SCOAL):
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
         new_row_clusters = row_clusters
         new_row_clusters[new_row_clusters==row_cluster] = np.random.choice([row_cluster,n_row_clusters],new_row_clusters[new_row_clusters==row_cluster].size)
+        coclusters = (new_row_clusters,col_clusters)
 
-        return new_row_clusters, models
+        return coclusters, models
   
     def _split_col_cluster_random(self,train_data,coclusters,models,col_cluster):
         row_clusters, col_clusters = coclusters
         n_row_clusters, n_col_clusters  = np.unique(row_clusters).size, np.unique(col_clusters).size
         new_col_clusters = col_clusters
         new_col_clusters[new_col_clusters==col_cluster] = np.random.choice([col_cluster,n_col_clusters],new_col_clusters[new_col_clusters==col_cluster].size)
+        coclusters = (row_clusters,new_col_clusters)
 
-        return new_col_clusters, models
+        return coclusters, models
 
     def _delete_row_cluster_random(self,train_data,coclusters,models,row_cluster):
         row_clusters,col_clusters = coclusters
@@ -785,8 +819,9 @@ class EvoSCOAL(SCOAL):
         new_row_clusters[new_row_clusters==row_cluster] = -1
         new_row_clusters[new_row_clusters>row_cluster] -= 1
         new_row_clusters[new_row_clusters==-1]  = np.random.choice(np.arange(n_row_clusters-1),new_row_clusters[new_row_clusters==-1].size)
+        coclusters = (new_row_clusters,col_clusters)
 
-        return new_row_clusters, models
+        return coclusters, models
 
     def _delete_col_cluster_random(self,train_data,coclusters,models,col_cluster):
         row_clusters,col_clusters = coclusters
@@ -795,8 +830,9 @@ class EvoSCOAL(SCOAL):
         new_col_clusters[new_col_clusters==col_cluster] = -1
         new_col_clusters[new_col_clusters>col_cluster] -= 1
         new_col_clusters[new_col_clusters==-1]  = np.random.choice(np.arange(n_col_clusters-1),new_col_clusters[new_col_clusters==-1].size)
+        coclusters = (row_clusters,new_col_clusters)
 
-        return new_col_clusters, models
+        return coclusters, models
 
 
 
