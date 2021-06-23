@@ -2,7 +2,6 @@ import numpy as np
 import time
 from sklearn.base import is_regressor
 from sklearn.linear_model import LinearRegression
-from scipy.stats import norm
 from sklearn.neighbors import NearestCentroid
 from sklearn.cluster import KMeans
 from joblib import Parallel, delayed, Memory
@@ -64,14 +63,16 @@ class EvoSCOAL(SCOAL):
         X, y = self._get_X_y(data,rows,cols)
         model = models[row_cluster][col_cluster]
         log_likelihood = 0
-        if y.size > 0:
-            y_pred = model.predict(X) if self.is_regressor else model.predict_proba(X)[:,1]
+        if y.size > 0:   
             n = y.size
-            sse = np.sum((y - y_pred)**2)
-            log_likelihood = np.sum(norm.logpdf(y,loc=y_pred,scale=np.sqrt(sse/n)))
-            #log_likelihood = -np.log(sse/n)*(n/2) - (1+np.log(2*np.pi))*(n/2)
-            #log_likelihood = -np.log(sse) * (n/2) - (1+np.log(np.pi/(n/2)))*(n/2)
-
+            if self.is_regressor:
+                y_pred = model.predict(X) 
+                sse = self._scoring(y,y_pred)
+                log_likelihood  = -n/2*(np.log(2*np.pi*(sse/n))+1)
+            else:
+                y_pred = model.predcit_proba(X)[:,1]
+                log_loss = self._scoring(y,y_pred)
+                log_likelihood = -1*log_loss
 
         return log_likelihood 
         
