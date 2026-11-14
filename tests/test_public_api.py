@@ -32,3 +32,18 @@ def test_make_dataset_returns_consistent_feature_and_target_shapes():
     assert col_clusters.shape == (3,)
     assert coefs.shape == (2, 2, 3)
     assert np.isfinite(target).all()
+
+
+def test_make_dataset_does_not_change_numpy_global_random_state():
+    initial_state = np.random.get_state()
+    try:
+        np.random.seed(123)
+        expected_next_value = np.random.random()
+
+        np.random.seed(123)
+        make_dataset(n_rows=4, n_cols=3, seed=7)
+        actual_next_value = np.random.random()
+    finally:
+        np.random.set_state(initial_state)
+
+    assert actual_next_value == expected_next_value
