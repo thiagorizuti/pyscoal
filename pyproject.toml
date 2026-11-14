@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=84.1.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -14,10 +14,10 @@ authors = [
 license = { text = "MIT" }
 keywords = ["co-clustering", "machine-learning", "sparse-matrix", "scikit-learn"]
 dependencies = [
-  "numpy",
-  "scipy",
-  "scikit-learn",
-  "joblib",
+  "numpy>=1.22",
+  "scipy>=1.10",
+  "scikit-learn>=1.5",
+  "joblib>=1.2",
 ]
 
 [project.optional-dependencies]
